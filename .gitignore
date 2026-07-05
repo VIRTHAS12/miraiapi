@@ -1,0 +1,7 @@
+# Sembunyikan file konfigurasi rahasia
+.env
+config.php
+
+# Sembunyikan log eror lokal
+*.log
+debug_openclaw.log
