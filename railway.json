@@ -4,7 +4,6 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "nginx -g 'daemon off;' & php-fpm",
-    "root": "public"
+    "startCommand": "php -S 0.0.0.0:$PORT public/router.php"
   }
 }
