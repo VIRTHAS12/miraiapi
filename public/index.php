@@ -24,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 // ✅ Load .env dan function helper
 require BASE_PATH . 'function.php';
 $dotenv = Dotenv::createUnsafeImmutable(BASE_PATH);
-$dotenv->load();
+$dotenv->safeLoad();
 
 // ✅ Inisialisasi JWT
 $key = $_ENV['ACCESS_TOKEN_SECRET'];
