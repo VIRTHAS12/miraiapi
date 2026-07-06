@@ -333,7 +333,7 @@ class ChatController
                         "mode"     => "backend"
                     ],
                     "role"         => "operator",
-                    "scopes" => ["operator.read", "operator.write"],
+                    "scopes" => ["operator.pairing, operator.read", "operator.write"],
                     "auth"         => [
                         "token" => $token
                     ]
