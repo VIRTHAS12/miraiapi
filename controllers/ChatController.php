@@ -111,7 +111,7 @@ class ChatController
         }
 
         // ========================================================
-        // 🔀 PERCABANGAN AKSI: CREATE VS UPDATE
+        // 🔀 PERCABANGAN AKSI: CREATE VS UPDATE VS DELETE
         // ========================================================
         $calendarController = new \Controllers\CalendarController();
 
@@ -151,7 +151,7 @@ class ChatController
                 'deleted_title' => $targetEvent['title']
             ]);
 
-            // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
+        // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
         } elseif (isset($parsed['action']) && $parsed['action'] === 'update') {
             $existingEvents = $this->eventModel->getUserEvents($user['id']);
             $targetEvent = null;
@@ -183,7 +183,6 @@ class ChatController
             $googleResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
             // 🔥 DETEKSI CLASH SAAT UPDATE
-            // Karena updateEvent() mengembalikan format response() standar, kita cek HTTP status atau isi bodynya
             $responseData = json_decode($googleResponse->getBody(), true);
             if (isset($responseData['status']) && $responseData['status'] === 'error') {
                 $clashMessage = $responseData['message'] ?? "Gagal update jadwal karena bentrok, brok.";
@@ -192,7 +191,7 @@ class ChatController
                     'role'    => 'assistant',
                     'content' => $clashMessage
                 ]);
-                return $googleResponse; // Teruskan response error 409 ke frontend
+                return $googleResponse; 
             }
 
             $timeStartStr = date('H:i', strtotime($parsed['start']));
@@ -214,9 +213,8 @@ class ChatController
                 'google_response' => $responseData
             ]);
 
-            // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
+        // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
-            // 🔥 JALANKAN DULU fungsinya, jangan langsung simpan pesan sukses ke DB!
             $eventResponse = $calendarController->createEventFromAI(
                 $user,
                 $parsed['title'],
@@ -242,7 +240,7 @@ class ChatController
                 return response('error', $eventResponse['message'], $eventResponse['raw'], 500);
             }
 
-            // JIKA SELESAI DAN SUKSES, BARU SIMPAN PESAN SUKSES KE DB CHAT
+            // JIKA SELESAI DAN SUKSES, SIMPAN KE DB
             $successMessage = "Berhasil menjadwalkan kegiatan: " . $parsed['title'] . " ✅";
             $this->chatModel->saveMessage([
                 'user_id' => $user['id'],
@@ -256,6 +254,7 @@ class ChatController
             ]);
         }
     }
+
     // 📜 METHOD LOGIC HISTORY
     public function history()
     {
@@ -272,16 +271,13 @@ class ChatController
             if ($chat['role'] === 'assistant') {
                 $extractedTitle = null;
 
-                // 🔥 REGEX 1: Deteksi kalimat sukses Create (Bisa handle centang/emoji di ujung)
                 if (preg_match('/Berhasil menjadwalkan kegiatan:\s*(.+?)(?:\s*✅)?$/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
                 }
-                // 🔥 REGEX 2: Deteksi kalimat sukses Update agar dapet card juga pas dimuat ulang
                 elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
                 }
 
-                // Jika judul berhasil ditarik, cari object-nya di list event user
                 if ($extractedTitle) {
                     foreach ($userEvents as $evt) {
                         if (strtolower($evt['title']) === strtolower($extractedTitle)) {
@@ -307,18 +303,21 @@ class ChatController
         return response('success', 'Riwayat chat asisten berhasil dimuat.', $formattedData);
     }
 
-    // 🔧 HELPER CALL OPENCLAW
+    // 🔧 HELPER CALL OPENCLAW (OPTIMIZED & CLEAN FROM FILE I/O BLOCKING)
     private function callOpenClaw($systemPrompt, $userMessage)
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
         $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
 
         try {
-            $client = new \WebSocket\Client($apiUrl, ['timeout' => 60]);
+            // Ditambahkan timeout & opsi network optimization
+            $client = new \WebSocket\Client($apiUrl, [
+                'timeout' => 30,
+                'fragment_size' => 4096
+            ]);
 
             // 1. Handshake
-            $handshake = $client->receive();
-            file_put_contents('debug_openclaw.log', "HANDSHAKE:\n$handshake\n\n", FILE_APPEND);
+            $client->receive();
 
             // 2. Connect payload
             $connectPayload = [
@@ -346,7 +345,6 @@ class ChatController
 
             // 3. Auth
             $auth = $client->receive();
-            file_put_contents('debug_openclaw.log', "AUTH:\n$auth\n\n", FILE_APPEND);
             $authDecoded = json_decode($auth, true);
 
             if (!($authDecoded['ok'] ?? false)) {
@@ -373,19 +371,17 @@ class ChatController
             ];
 
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
-            file_put_contents('debug_openclaw.log', "PROMPT SENT\n", FILE_APPEND);
 
-            // 5. Streaming Loop Response Handler (Anti Gantung)
+            // 5. Streaming Loop Response Handler (CRITICAL: CLEAN FROM DISK WRITE LOGGING)
             $aiTextResponse = "";
 
             while (true) {
                 $msg = $client->receive();
                 if (!$msg) break;
 
-                file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
                 $decoded = json_decode($msg, true);
 
-                // Langsung skip jika frame hanya berupa tick/health keep-alive
+                // Langsung skip frame tick/health keep-alive demi performa
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
                     continue;
                 }
