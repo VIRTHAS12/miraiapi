@@ -151,7 +151,7 @@ class ChatController
                 'deleted_title' => $targetEvent['title']
             ]);
 
-        // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
+            // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
         } elseif (isset($parsed['action']) && $parsed['action'] === 'update') {
             $existingEvents = $this->eventModel->getUserEvents($user['id']);
             $targetEvent = null;
@@ -191,7 +191,7 @@ class ChatController
                     'role'    => 'assistant',
                     'content' => $clashMessage
                 ]);
-                return $googleResponse; 
+                return $googleResponse;
             }
 
             $timeStartStr = date('H:i', strtotime($parsed['start']));
@@ -213,7 +213,7 @@ class ChatController
                 'google_response' => $responseData
             ]);
 
-        // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
+            // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
             $eventResponse = $calendarController->createEventFromAI(
                 $user,
@@ -273,8 +273,7 @@ class ChatController
 
                 if (preg_match('/Berhasil menjadwalkan kegiatan:\s*(.+?)(?:\s*✅)?$/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
-                }
-                elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
+                } elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
                 }
 
@@ -334,7 +333,7 @@ class ChatController
                         "mode"     => "backend"
                     ],
                     "role"         => "operator",
-                    
+                    "scopes" => ["operator.admin", "operator.read", "operator.write"],
                     "auth"         => [
                         "token" => $token
                     ]
