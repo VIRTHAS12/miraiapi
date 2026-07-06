@@ -8,10 +8,22 @@ class Database
 {
     public $pdo;
     public $statement;
-    public function __construct($config, $username = 'root', $password = '')
+    public function __construct($config)
     {
+        // Ambil data database dari array config bawaan, atau fallback ke $_ENV Railway
+        $username = $config['user'] ?? $_ENV['DB_USER'] ?? 'root';
+        $password = $config['password'] ?? $_ENV['DB_PASS'] ?? '';
+
+        // Kita bersihkan dulu array config dari key user & password biar gak mengacaukan string DSN mysql
+        unset($config['user']);
+        unset($config['password']);
+
+        // Bangun string DSN (host=...;port=...;dbname=...)
         $dsn = 'mysql:' . http_build_query($config, '', ';');
-        $this->pdo = new PDO($dsn, $username, $password, [PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+
+        $this->pdo = new PDO($dsn, $username, $password, [
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        ]);
     }
     public function query($query, $parms = [])
     {
