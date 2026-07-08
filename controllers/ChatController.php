@@ -183,7 +183,6 @@ class ChatController
             $googleResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
             // 🔥 DETEKSI CLASH SAAT UPDATE
-            // Karena updateEvent() mengembalikan format response() standar, kita cek HTTP status atau isi bodynya
             $responseData = json_decode($googleResponse->getBody(), true);
             if (isset($responseData['status']) && $responseData['status'] === 'error') {
                 $clashMessage = $responseData['message'] ?? "Gagal update jadwal karena bentrok, brok.";
@@ -192,7 +191,7 @@ class ChatController
                     'role'    => 'assistant',
                     'content' => $clashMessage
                 ]);
-                return $googleResponse; // Teruskan response error 409 ke frontend
+                return $googleResponse;
             }
 
             $timeStartStr = date('H:i', strtotime($parsed['start']));
@@ -216,7 +215,6 @@ class ChatController
 
             // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
-            // 🔥 JALANKAN DULU fungsinya, jangan langsung simpan pesan sukses ke DB!
             $eventResponse = $calendarController->createEventFromAI(
                 $user,
                 $parsed['title'],
@@ -256,6 +254,7 @@ class ChatController
             ]);
         }
     }
+
     // 📜 METHOD LOGIC HISTORY
     public function history()
     {
@@ -272,16 +271,12 @@ class ChatController
             if ($chat['role'] === 'assistant') {
                 $extractedTitle = null;
 
-                // 🔥 REGEX 1: Deteksi kalimat sukses Create (Bisa handle centang/emoji di ujung)
                 if (preg_match('/Berhasil menjadwalkan kegiatan:\s*(.+?)(?:\s*✅)?$/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
-                }
-                // 🔥 REGEX 2: Deteksi kalimat sukses Update agar dapet card juga pas dimuat ulang
-                elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
+                } elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
                 }
 
-                // Jika judul berhasil ditarik, cari object-nya di list event user
                 if ($extractedTitle) {
                     foreach ($userEvents as $evt) {
                         if (strtolower($evt['title']) === strtolower($extractedTitle)) {
@@ -308,13 +303,10 @@ class ChatController
     }
 
     // 🔧 HELPER CALL OPENCLAW
-
-
     private function callOpenClaw($systemPrompt, $userMessage)
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
         $password = trim($_ENV['OPENCLAW_GATEWAY_PASSWORD']);
-        // Token tepercaya milik device 7cda61e7... yang ada di devices.json lu
         $deviceToken = "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE";
 
         try {
@@ -334,41 +326,55 @@ class ChatController
                 return ['error' => true, 'message' => 'Gagal mendapatkan challenge nonce dari Funnel Gateway.'];
             }
 
-            // 🔥 2. Hitung Signature Kriptografi V3 secara Real-time
-            $signature = $this->generateOpenClawSignature($nonce, $ts, $deviceToken);
+            // Fix Pemanggilan Internal Method menggunakan $this->
+            $kp = $this->loadOrCreateBackendDeviceKeypair();
+            $deviceId = hash('sha256', $kp['publicKey']);
+            $role = 'operator';
+            $scopes = ['operator.admin', 'operator.read', 'operator.write'];
+            $clientMode = 'backend';
+            $signedAtMs = (int) round(microtime(true) * 1000);
 
-            // 3. Susun Connect Payload Sesuai Aturan Saklek Schema OpenClaw
+            $authToken = $deviceToken;
+
+            // Fix Pemanggilan Internal Method menggunakan $this->
+            $signature = $this->buildAndSignDeviceAuth(
+                $kp['secretKey'],
+                $deviceId,
+                'cli',
+                $clientMode,
+                $role,
+                $scopes,
+                $signedAtMs,
+                $authToken,
+                $nonce,
+                'linux',
+                'server'
+            );
+
+            // Fix Sintaks Base64url Pemanggilan Method Internal menggunakan $this->
             $connectPayload = [
-                "type"   => "req",
-                "id"     => uniqid(),
+                "type" => "req",
+                "id" => uniqid(),
                 "method" => "connect",
                 "params" => [
                     "minProtocol" => 4,
                     "maxProtocol" => 4,
-                    "client"      => [
-                        "id"       => "cli",
-                        "version"  => "1.0.0",
-                        "platform" => "linux",
-                        "mode"     => "cli"        // ✅ FIX: Harus 'cli' sesuai enum validator schema!
-                    ],
+                    "client" => ["id" => "cli", "version" => "1.0.0", "platform" => "linux", "mode" => $clientMode],
                     "device" => [
-                        "id"        => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
-                        "publicKey" => "AFwoB9LySrRjA7xK5YrXRvjfi0rzvzXU4jSyb9XzayQ",
+                        "id" => $deviceId,
+                        "publicKey" => $this->base64url($kp['publicKey']),
                         "signature" => $signature,
-                        "signedAt"  => (int)$ts,
-                        "nonce"     => (string)$nonce
+                        "signedAt" => $signedAtMs,
+                        "nonce" => (string)$nonce,
                     ],
-                    "role"   => "operator", // (Kalau di sini baru bener nilainya 'operator')
-                    "scopes" => ["operator.admin", "operator.read", "operator.write"],
-                    "auth"   => [
-                        "password" => $password,
-                        "token"    => $deviceToken
-                    ]
-                ]
+                    "role" => $role,
+                    "scopes" => $scopes,
+                    "auth" => ["password" => $password, "token" => $authToken],
+                ],
             ];
             $client->text(json_encode($connectPayload));
 
-            // 4. Ambal Sesi Validasi Auth
+            // 4. Ambil Sesi Validasi Auth
             $auth = $client->receive();
             file_put_contents('debug_openclaw.log', "AUTH RESPONSE:\n$auth\n\n", FILE_APPEND);
             $authDecoded = json_decode($auth, true);
@@ -378,7 +384,7 @@ class ChatController
                 return ['error' => true, 'message' => 'Crypto Auth Gagal: ' . ($authDecoded['error']['message'] ?? 'Akses Ditolak')];
             }
 
-            // 5. Send Message Prompt (Gunakan alur stream andalan commit pertama lu)
+            // 5. Send Message Prompt
             $requestId = uniqid();
             $fullMessageString = $userMessage;
             if (!empty($systemPrompt)) {
@@ -459,22 +465,66 @@ class ChatController
         }
     }
 
-    private function generateOpenClawSignature($nonce, $ts, $deviceToken)
+    // === Kelola keypair Ed25519 secara persisten ===
+    private function loadOrCreateBackendDeviceKeypair(): array
     {
-        $deviceId = "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b";
-        $clientId = "cli";
-        $clientMode = "cli"; // Singkronkan dengan connect payload
+        $path = BASE_PATH . 'storage/openclaw_device.json';
 
-        // Urutan V3 signature builder: deviceId:clientId:nonce:timestamp:clientMode
-        $messageToSign = sprintf(
-            "%s:%s:%s:%d:%s",
+        if (file_exists($path)) {
+            $data = json_decode(file_get_contents($path), true);
+            return [
+                'secretKey' => base64_decode($data['secretKey']),
+                'publicKey' => base64_decode($data['publicKey']),
+            ];
+        }
+
+        $kp = sodium_crypto_sign_keypair();
+        $secretKey = sodium_crypto_sign_secretkey($kp);
+        $publicKey = sodium_crypto_sign_publickey($kp);
+
+        file_put_contents($path, json_encode([
+            'secretKey' => base64_encode($secretKey),
+            'publicKey' => base64_encode($publicKey),
+        ]));
+
+        sodium_memzero($kp);
+        return ['secretKey' => $secretKey, 'publicKey' => $publicKey];
+    }
+
+    private function base64url(string $raw): string
+    {
+        return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
+    }
+
+    // === Bangun payload v3 & sign ===
+    private function buildAndSignDeviceAuth(
+        string $secretKey,
+        string $deviceId,
+        string $clientId,
+        string $clientMode,
+        string $role,
+        array $scopes,
+        int $signedAtMs,
+        ?string $token,
+        string $nonce,
+        string $platform,
+        string $deviceFamily
+    ): string {
+        $payload = implode('|', [
+            'v3',
             $deviceId,
             $clientId,
+            $clientMode,
+            $role,
+            implode(',', $scopes),
+            (string)$signedAtMs,
+            $token ?? '',
             $nonce,
-            (int)$ts,
-            $clientMode
-        );
+            strtolower(trim($platform)),
+            strtolower(trim($deviceFamily)),
+        ]);
 
-        return hash_hmac('sha256', $messageToSign, $deviceToken);
+        $sig = sodium_crypto_sign_detached($payload, $secretKey);
+        return $this->base64url($sig); // Fix internal reference syntax
     }
 }
