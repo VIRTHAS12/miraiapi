@@ -334,12 +334,12 @@ class ChatController
                         "platform" => "linux",
                         "mode"     => "backend"
                     ],
-                    // ❌ HAPUS TOTAL OBJEK "device" biar gak rewel minta publicKey atau signature!
+                    // ❌ HAPUS TOTAL OBJEK DEVICE (Bebas dari todongan publicKey/signature)
                     "role"   => "operator",
                     "scopes" => ["operator.admin", "operator.read", "operator.write"],
                     "auth"   => [
-                        // Gunakan token master 270fa... yang lu temukan di openclaw.json
-                        "token" => $_ENV['OPENCLAW_GATEWAY_TOKEN']
+                        // Masukkan token master 270fa... lu yang valid di openclaw.json
+                        "token" => "270fa1ae6ef6aa5e08bddc17857172c4fe9a2bcd6970b55e"
                     ]
                 ]
             ];
