@@ -332,21 +332,19 @@ class ChatController
                 "id"     => uniqid(),
                 "method" => "connect",
                 "params" => [
-                    "minProtocol" => 4,
+                    "minProtocol" => 3,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "cli",       // ✅ FIX: Harus masuk enum allowed values ('cli')
+                        "id"       => "gateway-client", // ✅ Masuk allowed value khusus control-plane
                         "version"  => "1.0.0",
                         "platform" => "linux",
-                        "mode"     => "operator"   // ✅ FIX: Harus masuk enum allowed values ('operator')
+                        "mode"     => "backend"        // ✅ Pasangan resmi untuk gateway-client
                     ],
-                    "device" => [
-                        "id"        => "php-backend-device", // Sesuai yang lu set di devices.json
-                        "publicKey" => "N/A"                 // ✅ FIX: Wajib ada biar gak didepak Schema Validator
-                    ],
+                    // ❌ HAPUS TOTAL OBJEK "device" agar OpenClaw tidak menuntut 'signature' atau 'publicKey'
                     "role"   => "operator",
                     "scopes" => ["operator.admin", "operator.read", "operator.write"],
                     "auth"   => [
+                        // Tetap kirim password cadangan di body sesuai syarat wajib Funnel mode
                         "password" => $password
                     ]
                 ]
