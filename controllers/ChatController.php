@@ -336,10 +336,10 @@ class ChatController
             $nonce = $handshakeDecoded['payload']['nonce'] ?? '';
             $ts = $handshakeDecoded['payload']['ts'] ?? '';
 
-            // Hitung signature otomatis menggunakan Token Perangkat
+            // Hitung signature menggunakan Token Perangkat
             $signature = hash_hmac('sha256', $nonce . $ts, "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE");
 
-            // 2. Connect payload (Lengkap dengan properti signedAt yang diminta skema)
+            // 2. Connect payload (Lengkap: id, publicKey, signature, signedAt, dan nonce!)
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -357,8 +357,9 @@ class ChatController
                         "id"        => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
                         "publicKey" => "AFwoB9LySrRjA7xK5YrXRvjfi0rzvzXU4jSyb9XzayQ",
                         "signature" => $signature,
-                        // ✅ KUNCI TERAKHIR: Masukkan timestamp handshake ke signedAt sebagai integer
-                        "signedAt"  => (int)$ts
+                        "signedAt"  => (int)$ts,
+                        // ✅ SUNTIKAN TERAKHIR: Masukkan string nonce dari handshake
+                        "nonce"     => (string)$nonce
                     ],
                     "role"         => "operator",
                     "scopes"       => ["operator.admin", "operator.read", "operator.write"],
