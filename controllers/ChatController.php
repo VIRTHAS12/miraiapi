@@ -183,6 +183,7 @@ class ChatController
             $googleResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
             // 🔥 DETEKSI CLASH SAAT UPDATE
+            // Karena updateEvent() mengembalikan format response() standar, kita cek HTTP status atau isi bodynya
             $responseData = json_decode($googleResponse->getBody(), true);
             if (isset($responseData['status']) && $responseData['status'] === 'error') {
                 $clashMessage = $responseData['message'] ?? "Gagal update jadwal karena bentrok, brok.";
@@ -191,7 +192,7 @@ class ChatController
                     'role'    => 'assistant',
                     'content' => $clashMessage
                 ]);
-                return $googleResponse;
+                return $googleResponse; // Teruskan response error 409 ke frontend
             }
 
             $timeStartStr = date('H:i', strtotime($parsed['start']));
@@ -215,6 +216,7 @@ class ChatController
 
             // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
+            // 🔥 JALANKAN DULU fungsinya, jangan langsung simpan pesan sukses ke DB!
             $eventResponse = $calendarController->createEventFromAI(
                 $user,
                 $parsed['title'],
@@ -254,7 +256,6 @@ class ChatController
             ]);
         }
     }
-
     // 📜 METHOD LOGIC HISTORY
     public function history()
     {
@@ -271,12 +272,16 @@ class ChatController
             if ($chat['role'] === 'assistant') {
                 $extractedTitle = null;
 
+                // 🔥 REGEX 1: Deteksi kalimat sukses Create (Bisa handle centang/emoji di ujung)
                 if (preg_match('/Berhasil menjadwalkan kegiatan:\s*(.+?)(?:\s*✅)?$/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
-                } elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
+                }
+                // 🔥 REGEX 2: Deteksi kalimat sukses Update agar dapet card juga pas dimuat ulang
+                elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
                 }
 
+                // Jika judul berhasil ditarik, cari object-nya di list event user
                 if ($extractedTitle) {
                     foreach ($userEvents as $evt) {
                         if (strtolower($evt['title']) === strtolower($extractedTitle)) {
@@ -306,85 +311,50 @@ class ChatController
     private function callOpenClaw($systemPrompt, $userMessage)
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
-        $password = trim($_ENV['OPENCLAW_GATEWAY_PASSWORD']);
-        $deviceToken = "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE";
+        $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
 
         try {
-            $client = new \WebSocket\Client($apiUrl, [
-                'timeout' => 45,
-                'fragment_size' => 4096
-            ]);
+            $client = new \WebSocket\Client($apiUrl, ['timeout' => 60]);
 
-            // 1. Terima Challenge Frame (Dapatkan Nonce & Timestamp)
-            $challenge = $client->receive();
-            $challengeDecoded = json_decode($challenge, true);
+            // 1. Handshake
+            $handshake = $client->receive();
+            file_put_contents('debug_openclaw.log', "HANDSHAKE:\n$handshake\n\n", FILE_APPEND);
 
-            $nonce = $challengeDecoded['payload']['nonce'] ?? '';
-            $ts = $challengeDecoded['payload']['ts'] ?? '';
-
-            if (empty($nonce) || empty($ts)) {
-                return ['error' => true, 'message' => 'Gagal mendapatkan challenge nonce dari Funnel Gateway.'];
-            }
-
-            // Fix Pemanggilan Internal Method menggunakan $this->
-            $kp = $this->loadOrCreateBackendDeviceKeypair();
-            $deviceId = hash('sha256', $kp['publicKey']);
-            $role = 'operator';
-            $scopes = ['operator.admin', 'operator.read', 'operator.write'];
-            $clientMode = 'backend';
-            $signedAtMs = (int) round(microtime(true) * 1000);
-
-            $authToken = $deviceToken;
-
-            // Fix Pemanggilan Internal Method menggunakan $this->
-            $signature = $this->buildAndSignDeviceAuth(
-                $kp['secretKey'],
-                $deviceId,
-                'cli',
-                $clientMode,
-                $role,
-                $scopes,
-                $signedAtMs,
-                $authToken,
-                $nonce,
-                'linux',
-                'server'
-            );
-
-            // Fix Sintaks Base64url Pemanggilan Method Internal menggunakan $this->
+            // 2. Connect payload
             $connectPayload = [
-                "type" => "req",
-                "id" => uniqid(),
+                "type"   => "req",
+                "id"     => uniqid(),
                 "method" => "connect",
                 "params" => [
-                    "minProtocol" => 4,
+                    "minProtocol" => 3,
                     "maxProtocol" => 4,
-                    "client" => ["id" => "cli", "version" => "1.0.0", "platform" => "linux", "mode" => $clientMode],
-                    "device" => [
-                        "id" => $deviceId,
-                        "publicKey" => $this->base64url($kp['publicKey']),
-                        "signature" => $signature,
-                        "signedAt" => $signedAtMs,
-                        "nonce" => (string)$nonce,
+                    "client"      => [
+                        "id"       => "gateway-client",
+                        "version"  => "1.0.0",
+                        "platform" => "linux",
+                        "mode"     => "backend"
                     ],
-                    "role" => $role,
-                    "scopes" => $scopes,
-                    "auth" => ["password" => $password, "token" => $authToken],
-                ],
+                    "role"         => "operator",
+                    "scopes"       => ["operator.admin", "operator.read", "operator.write"],
+                    "auth"         => [
+                        "token" => $token
+                    ]
+                ]
             ];
+
             $client->text(json_encode($connectPayload));
 
-            // 4. Ambil Sesi Validasi Auth
+            // 3. Auth
             $auth = $client->receive();
-            file_put_contents('debug_openclaw.log', "AUTH RESPONSE:\n$auth\n\n", FILE_APPEND);
+            file_put_contents('debug_openclaw.log', "AUTH:\n$auth\n\n", FILE_APPEND);
             $authDecoded = json_decode($auth, true);
 
-            if (isset($authDecoded['ok']) && $authDecoded['ok'] === false) {
+            if (!($authDecoded['ok'] ?? false)) {
                 $client->close();
-                return ['error' => true, 'message' => 'Crypto Auth Gagal: ' . ($authDecoded['error']['message'] ?? 'Akses Ditolak')];
+                return ['error' => true, 'message' => 'Auth Client Gagal', 'raw' => $auth];
             }
 
-            // 5. Send Message Prompt
+            // 4. Send Message
             $requestId = uniqid();
             $fullMessageString = $userMessage;
             if (!empty($systemPrompt)) {
@@ -403,21 +373,26 @@ class ChatController
             ];
 
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
+            file_put_contents('debug_openclaw.log', "PROMPT SENT\n", FILE_APPEND);
 
-            // 6. Streaming Loop Response Handler
+            // 5. Streaming Loop Response Handler (Anti Gantung)
             $aiTextResponse = "";
+
             while (true) {
                 $msg = $client->receive();
                 if (!$msg) break;
 
+                file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
                 $decoded = json_decode($msg, true);
 
+                // Langsung skip jika frame hanya berupa tick/health keep-alive
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
                     continue;
                 }
 
                 if (isset($decoded['type']) && $decoded['type'] === 'event') {
                     if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
+
                         $chunkText = $decoded['payload']['deltaText']
                             ?? $decoded['payload']['data']['text']
                             ?? $decoded['payload']['data']['delta']
@@ -427,6 +402,7 @@ class ChatController
                             $aiTextResponse .= $chunkText;
                         }
 
+                        // Jika keluar status final, segera amankan text dan paksa keluar loop
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             if (isset($decoded['payload']['message']['content'][0]['text'])) {
                                 $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
@@ -452,79 +428,23 @@ class ChatController
             }
 
             $client->close();
-            return [
-                'choices' => [[
-                    'message' => [
-                        'role'    => 'assistant',
-                        'content' => trim($aiTextResponse)
+
+            if (!empty($aiTextResponse)) {
+                return [
+                    'choices' => [
+                        [
+                            'message' => [
+                                'role'    => 'assistant',
+                                'content' => trim($aiTextResponse)
+                            ]
+                        ]
                     ]
-                ]]
-            ];
+                ];
+            }
+
+            return ['error' => true, 'message' => 'Sesi chat selesai tanpa mengembalikan output teks.'];
         } catch (\Throwable $e) {
             return ['error' => true, 'message' => $e->getMessage()];
         }
-    }
-
-    // === Kelola keypair Ed25519 secara persisten ===
-    private function loadOrCreateBackendDeviceKeypair(): array
-    {
-        $path = BASE_PATH . 'storage/openclaw_device.json';
-
-        if (file_exists($path)) {
-            $data = json_decode(file_get_contents($path), true);
-            return [
-                'secretKey' => base64_decode($data['secretKey']),
-                'publicKey' => base64_decode($data['publicKey']),
-            ];
-        }
-
-        $kp = sodium_crypto_sign_keypair();
-        $secretKey = sodium_crypto_sign_secretkey($kp);
-        $publicKey = sodium_crypto_sign_publickey($kp);
-
-        file_put_contents($path, json_encode([
-            'secretKey' => base64_encode($secretKey),
-            'publicKey' => base64_encode($publicKey),
-        ]));
-
-        sodium_memzero($kp);
-        return ['secretKey' => $secretKey, 'publicKey' => $publicKey];
-    }
-
-    private function base64url(string $raw): string
-    {
-        return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
-    }
-
-    // === Bangun payload v3 & sign ===
-    private function buildAndSignDeviceAuth(
-        string $secretKey,
-        string $deviceId,
-        string $clientId,
-        string $clientMode,
-        string $role,
-        array $scopes,
-        int $signedAtMs,
-        ?string $token,
-        string $nonce,
-        string $platform,
-        string $deviceFamily
-    ): string {
-        $payload = implode('|', [
-            'v3',
-            $deviceId,
-            $clientId,
-            $clientMode,
-            $role,
-            implode(',', $scopes),
-            (string)$signedAtMs,
-            $token ?? '',
-            $nonce,
-            strtolower(trim($platform)),
-            strtolower(trim($deviceFamily)),
-        ]);
-
-        $sig = sodium_crypto_sign_detached($payload, $secretKey);
-        return $this->base64url($sig); // Fix internal reference syntax
     }
 }
