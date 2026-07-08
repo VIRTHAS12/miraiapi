@@ -401,10 +401,12 @@ class ChatController
 
                 $decoded = json_decode($msg, true);
 
+                // Abaikan ping/heartbeat dari gateway
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
                     continue;
                 }
 
+                // Amankan pembacaan teks bertahap (Streaming Delta)
                 if (isset($decoded['type']) && $decoded['type'] === 'event') {
                     if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
 
@@ -417,6 +419,7 @@ class ChatController
                             $aiTextResponse .= $chunkText;
                         }
 
+                        // ✅ JIKA SESI SUDAH FINAL: Ambil teks utuh lalu break secara legal
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             if (isset($decoded['payload']['message']['content'][0]['text'])) {
                                 $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
@@ -430,19 +433,23 @@ class ChatController
                     }
                 }
 
+                // ✅ PENGAMAN TAMBAHAN: Validasi ID Request utama
                 if (isset($decoded['id']) && $decoded['id'] === $requestId) {
+                    // Jika ada error internal dari model AI OpenClaw
+                    if (isset($decoded['ok']) && $decoded['ok'] === false) {
+                        return ['error' => true, 'message' => $decoded['error']['message'] ?? 'OpenClaw execution error'];
+                    }
+                    
+                    // Jika mengembalikan data text instan non-stream
                     if (isset($decoded['payload']['message']['content'][0]['text'])) {
                         $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
                         break;
                     }
-                    if ($decoded['ok'] ?? false) {
-                        if (!empty($aiTextResponse)) break;
-                    }
                 }
             }
 
+            // Putus koneksi secara bersih setelah data rampung didapat
             $client->close();
-
             if (!empty($aiTextResponse)) {
                 return [
                     'choices' => [
