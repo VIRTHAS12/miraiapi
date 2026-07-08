@@ -326,20 +326,23 @@ class ChatController
                 "id"     => uniqid(),
                 "method" => "connect",
                 "params" => [
-                    "minProtocol" => 4, // Naikkan ke v4 sesuai standar terbaru server lu
+                    "minProtocol" => 4,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "gateway-client", // WAJIB
-                        "version"  => "1.0.0",
+                        "id"       => "cli",       // ✅ Gunakan id allowed resmi CLI
+                        "version"  => "1.2.3",
                         "platform" => "linux",
-                        "mode"     => "backend"        // WAJIB
+                        "mode"     => "cli"        // ✅ Gunakan mode allowed resmi CLI
                     ],
-                    // ❌ Omit/Hapus total objek device (karena loopback via Ngrok dapat bypass device auth)
+                    "device" => [
+                        // ✅ Tembak ID device CLI lu yang terdaftar di paired.json
+                        "id" => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b"
+                    ],
                     "role"   => "operator",
-                    "scopes" => ["operator.admin", "operator.read", "operator.write"],
+                    "scopes" => ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
                     "auth"   => [
-                        // 🔥 MASUKKAN TOKEN UTAMA YANG BENER DI SINI BROK!
-                        "token" => "270fa1ae6ef6aa5e08bddc17857172c4fe9a2bcd6970b55e"
+                        // 🔥 Gunakan token operator yang nempel di device CLI lu!
+                        "token" => "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE"
                     ]
                 ]
             ];
