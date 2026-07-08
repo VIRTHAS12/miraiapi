@@ -326,22 +326,23 @@ class ChatController
                 "id"     => uniqid(),
                 "method" => "connect",
                 "params" => [
-                    "minProtocol" => 3,
+                    "minProtocol" => 4, // Naikkan ke v4 sesuai standar terbaru server lu
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "gateway-client",
+                        "id"       => "gateway-client", // WAJIB
                         "version"  => "1.0.0",
                         "platform" => "linux",
-                        "mode"     => "backend"
+                        "mode"     => "backend"        // WAJIB
                     ],
-                    "role"         => "operator",
-                    "scopes"       => ["operator.admin", "operator.read", "operator.write"],
-                    "auth"         => [
-                        "token" => $token
+                    // ❌ Omit/Hapus total objek device (karena loopback via Ngrok dapat bypass device auth)
+                    "role"   => "operator",
+                    "scopes" => ["operator.admin", "operator.read", "operator.write"],
+                    "auth"   => [
+                        // 🔥 MASUKKAN TOKEN UTAMA YANG BENER DI SINI BROK!
+                        "token" => "270fa1ae6ef6aa5e08bddc17857172c4fe9a2bcd6970b55e"
                     ]
                 ]
             ];
-
             $client->text(json_encode($connectPayload));
 
             // 3. Auth
