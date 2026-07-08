@@ -309,7 +309,6 @@ class ChatController
         $password = trim($_ENV['OPENCLAW_GATEWAY_PASSWORD']);
 
         try {
-            // Ditambahkan timeout & opsi network optimization
             $client = new \WebSocket\Client($apiUrl, [
                 'timeout' => 30,
                 'fragment_size' => 4096
@@ -318,7 +317,7 @@ class ChatController
             // 1. Handshake Awal WebSocket
             $client->receive();
 
-            // 2. Connect payload (Minta semua scope sekaligus dengan format array yang benar)
+            // 2. Connect payload
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -333,7 +332,6 @@ class ChatController
                         "mode"     => "backend"
                     ],
                     "role"   => "operator",
-                    // ✅ PERBAIKAN: Format array diperbaiki & langsung minta write akses
                     "scopes" => ["operator.read", "operator.admin", "operator.write"],
                     "auth"   => [
                         "password" => $password
@@ -347,19 +345,24 @@ class ChatController
             $auth = $client->receive();
             $authDecoded = json_decode($auth, true);
 
-            // 🔍 Tambahkan baris ini untuk debug di terminal / log PHP Anda:
-            file_put_contents('php://stderr', print_r($authDecoded, TRUE));
-            // Pastikan response sukses dan tidak mengembalikan error scope
+            // Tembak juga ke stderr Railway buat cadangan
+            file_put_contents('php://stderr', "--- AUTH RESPONSE ---\n" . print_r($authDecoded, TRUE) . "\n");
+
+            // 🔴 DEBUG 1: Jika Autentikasi Gagal, muntahkan struktur balasan ke chat screen
             if (!($authDecoded['ok'] ?? false)) {
                 $client->close();
-                return ['error' => true, 'message' => 'Auth Client Gagal atau Scope Ditolak', 'raw' => $auth];
+                $prettyAuth = json_encode($authDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                return [
+                    'choices' => [[
+                        'message' => [
+                            'role'    => 'assistant',
+                            'content' => "🛑 **[DEBUG EROR AUTH]** Gagal jabat tangan dengan OpenClaw Gateway, brok.\n\n```json\n" . $prettyAuth . "\n```"
+                        ]
+                    ]]
+                ];
             }
 
-            // ===================================================================================
-            // ✅ LANGKAH SCOPE.UPGRADE DIHAPUS karena sudah di-request secara legal di atas.
-            // ===================================================================================
-
-            // 4. Send Message (Langsung kirim karena status sesi sudah Authorized penuh)
+            // 4. Send Message
             $requestId = uniqid();
             $fullMessageString = $userMessage;
             if (!empty($systemPrompt)) {
@@ -381,12 +384,14 @@ class ChatController
 
             // 5. Streaming Loop Response Handler
             $aiTextResponse = "";
+            $rawLogsCollected = []; // Kolektor payload buat pelacakan eror stream
 
             while (true) {
                 $msg = $client->receive();
                 if (!$msg) break;
 
                 $decoded = json_decode($msg, true);
+                $rawLogsCollected[] = $decoded;
 
                 // Abaikan ping/heartbeat dari gateway
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
@@ -422,9 +427,18 @@ class ChatController
 
                 // Validasi ID Request utama
                 if (isset($decoded['id']) && $decoded['id'] === $requestId) {
+                    // 🔴 DEBUG 2: Jika AI mengalami eksekusi crash di tengah jalan
                     if (isset($decoded['ok']) && $decoded['ok'] === false) {
                         $client->close();
-                        return ['error' => true, 'message' => $decoded['error']['message'] ?? 'OpenClaw execution error'];
+                        $prettyStreamError = json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                        return [
+                            'choices' => [[
+                                'message' => [
+                                    'role'    => 'assistant',
+                                    'content' => "💥 **[DEBUG EROR RUNTIME AI]** Gemini/OpenClaw melempar eror saat memproses instruksi:\n\n```json\n" . $prettyStreamError . "\n```"
+                                ]
+                            ]]
+                        ];
                     }
 
                     if (isset($decoded['payload']['message']['content'][0]['text'])) {
@@ -434,24 +448,40 @@ class ChatController
                 }
             }
 
-            // Putus koneksi secara bersih setelah data rampung didapat
             $client->close();
+
+            // Kembalikan respon teks asli jika sukses
             if (!empty($aiTextResponse)) {
                 return [
-                    'choices' => [
-                        [
-                            'message' => [
-                                'role'    => 'assistant',
-                                'content' => trim($aiTextResponse)
-                            ]
+                    'choices' => [[
+                        'message' => [
+                            'role'    => 'assistant',
+                            'content' => trim($aiTextResponse)
                         ]
-                    ]
+                    ]]
                 ];
             }
 
-            return ['error' => true, 'message' => 'Sesi chat selesai tanpa mengembalikan output teks.'];
+            // 🔴 DEBUG 3: Koneksi close mulus tapi data kosong melompong (Tarik sampel log terakhir)
+            $samplePayload = json_encode(end($rawLogsCollected), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+            return [
+                'choices' => [[
+                    'message' => [
+                        'role'    => 'assistant',
+                        'content' => "⚠️ **[DEBUG EMPTY TEXT]** Koneksi ditutup tanpa teks balasan. Payload terakhir yang diterima:\n\n```json\n" . $samplePayload . "\n```"
+                    ]
+                ]]
+            ];
         } catch (\Throwable $e) {
-            return ['error' => true, 'message' => $e->getMessage()];
+            // 🔴 DEBUG 4: Tangkap eror fatal jaringan / driver websocket PHP
+            return [
+                'choices' => [[
+                    'message' => [
+                        'role'    => 'assistant',
+                        'content' => "🚨 **[DEBUG EXCEPTION PHP]** Gagal mengeksekusi request socket:\n\n`Minit-Error: " . $e->getMessage() . "`\n`File: " . $e->getFile() . " (Line: " . $e->getLine() . ")`"
+                    ]
+                ]]
+            ];
         }
     }
 }
