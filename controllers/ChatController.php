@@ -309,30 +309,28 @@ class ChatController
 
     // 🔧 HELPER CALL OPENCLAW
 
+
     private function callOpenClaw($systemPrompt, $userMessage)
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
         $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
 
         try {
-            // Tambahkan opsi fragment dan timeout yang pas untuk remote proxy
+            // 💡 SOLUSI UTAMA: Kirim token via HTTP Headers saat jabat tangan awal WebSocket
             $client = new \WebSocket\Client($apiUrl, [
                 'timeout' => 45,
-                'fragment_size' => 4096
+                'fragment_size' => 4096,
+                'headers' => [
+                    'X-API-KEY'     => $token,            // Metode Otentikasi Utama OpenClaw
+                    'Authorization' => 'Bearer ' . $token, // Metode Otentikasi Fallback
+                ]
             ]);
 
-            // 1. Handshake Awal (Dibuat Non-Blocking / Opsional)
-            // Beberapa versi gateway lewat Funnel langsung siap menerima data tanpa welcome frame
-            try {
-                $handshake = $client->receive();
-                file_put_contents('debug_openclaw.log', "HANDSHAKE RECEIVED:\n$handshake\n\n", FILE_APPEND);
-            } catch (\Throwable $e) {
-                // Jika gantung di awal, abaikan dan lanjut kirim payload connect
-                file_put_contents('debug_openclaw.log', "HANDSHAKE BYPASS / TIMEOUT\n", FILE_APPEND);
-            }
+            // 1. Handshake (Akan otomatis lolos tanpa memicu challenge jika header valid)
+            $handshake = $client->receive();
+            file_put_contents('debug_openclaw.log', "HANDSHAKE RECEIVED:\n$handshake\n\n", FILE_APPEND);
 
-            // 2. Connect payload (Sudah memakai Device ID & Key Password)
-
+            // 2. Connect payload
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -341,7 +339,6 @@ class ChatController
                     "minProtocol" => 3,
                     "maxProtocol" => 4,
                     "client"      => [
-                        // ✅ PERBAIKAN: Ubah kembali ke "cli" agar lolos validasi params OpenClaw
                         "id"       => "cli",
                         "version"  => "1.0.0",
                         "platform" => "linux",
@@ -349,10 +346,8 @@ class ChatController
                     ],
                     "role"         => "operator",
                     "scopes"       => ["operator.admin", "operator.read", "operator.write"],
-                    "auth"         => [
-                        // ✅ TETAP PERTAHANKAN: Pakai password agar token terbaca utuh oleh gateway
-                        "password" => $token
-                    ]
+                    // 💡 DIKOSONGKAN: Karena otentikasi sudah ditangani oleh HTTP Header di atas
+                    "auth"         => (object)[]
                 ]
             ];
 
@@ -400,6 +395,7 @@ class ChatController
                 $decoded = json_decode($msg, true);
 
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
+                    $client->text(json_encode(["type" => "pong"]));
                     continue;
                 }
 
@@ -416,8 +412,8 @@ class ChatController
                         }
 
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
-                            if (isset($decoded['payload']['message']['content'][0]['text'])) {
-                                $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
+                            if (isset($decoded['payload']['message']['content']['text'])) {
+                                $aiTextResponse = $decoded['payload']['message']['content']['text'];
                             }
                             break;
                         }
@@ -429,8 +425,8 @@ class ChatController
                 }
 
                 if (isset($decoded['id']) && $decoded['id'] === $requestId) {
-                    if (isset($decoded['payload']['message']['content'][0]['text'])) {
-                        $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
+                    if (isset($decoded['payload']['message']['content']['text'])) {
+                        $aiTextResponse = $decoded['payload']['message']['content']['text'];
                         break;
                     }
                     if ($decoded['ok'] ?? false) {
