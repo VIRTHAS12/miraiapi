@@ -337,10 +337,10 @@ class ChatController
             $ts = $handshakeDecoded['payload']['ts'] ?? '';
 
             // 💡 PERBAIKAN URUTAN & FORMAT STRING (Ditambahkan pemisah ':' sesuai protokol)
-            $messageToSign = $nonce . ":" . $ts;
+            //$messageToSign = $nonce . ":" . $ts;
 
             // 💡 FORMAT ALTERNATIF (Jika di atas masih gagal, OpenClaw kadang meminta timestamp dulu baru nonce):
-            // $messageToSign = $ts . ":" . $nonce;
+            $messageToSign = $ts . ":" . $nonce;
 
             // Hitung ulang signature menggunakan token perangkat Anda
             $signature = hash_hmac('sha256', $messageToSign, "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE");
