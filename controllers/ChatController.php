@@ -340,16 +340,15 @@ class ChatController
                     "minProtocol" => 3,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "cli",
+                        // ✅ DEVICE ID dimasukkan ke sini sebagai identitas perangkat lu
+                        "id"       => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
                         "version"  => "1.0.0",
                         "platform" => "linux",
                         "mode"     => "backend"
                     ],
                     "role"         => "operator",
                     "scopes"       => ["operator.admin", "operator.read", "operator.write"],
-                    "auth"         => [
-                        // ✅ LANGSUNG MASUKKAN DEVICE ID & TOKEN MENTAH SESUAI PENDAPAT LU
-                        "deviceId" => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
+                    "auth"         => [                        // ✅ LANGSUNG MASUKKAN DEVICE ID & TOKEN MENTAH SESUAI PENDAPAT LU
                         "token"    => "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE"
                     ]
                 ]
