@@ -332,6 +332,7 @@ class ChatController
             }
 
             // 2. Connect payload (Sudah memakai Device ID & Key Password)
+
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -340,7 +341,8 @@ class ChatController
                     "minProtocol" => 3,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
+                        // ✅ PERBAIKAN: Ubah kembali ke "cli" agar lolos validasi params OpenClaw
+                        "id"       => "cli",
                         "version"  => "1.0.0",
                         "platform" => "linux",
                         "mode"     => "backend"
@@ -348,6 +350,7 @@ class ChatController
                     "role"         => "operator",
                     "scopes"       => ["operator.admin", "operator.read", "operator.write"],
                     "auth"         => [
+                        // ✅ TETAP PERTAHANKAN: Pakai password agar token terbaca utuh oleh gateway
                         "password" => $token
                     ]
                 ]
