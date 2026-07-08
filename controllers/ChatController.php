@@ -312,59 +312,74 @@ class ChatController
 
     private function callOpenClaw($systemPrompt, $userMessage)
     {
-        $apiUrl = $_ENV['OPENCLAW_API_URL']; // URL Funnel wss://...
-        // Sesuai dokumen: Funnel wajib pakai password terkuat lu
+        $apiUrl = $_ENV['OPENCLAW_API_URL'];
         $password = trim($_ENV['OPENCLAW_GATEWAY_PASSWORD']);
+        // Token tepercaya milik device 7cda61e7... yang ada di devices.json lu
+        $deviceToken = "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE";
 
         try {
-            // Koneksi murni tanpa modifikasi header (karena funnel mengabaikan identity header)
             $client = new \WebSocket\Client($apiUrl, [
                 'timeout' => 45,
                 'fragment_size' => 4096
             ]);
 
-            // 1. Terima event challenge awal dari OpenClaw Funnel
+            // 1. Terima Challenge Frame (Dapatkan Nonce & Timestamp)
             $challenge = $client->receive();
+            $challengeDecoded = json_decode($challenge, true);
 
-            // 2. Susun Connect Payload berbasis PASSWORD + DEVICE ID
+            $nonce = $challengeDecoded['payload']['nonce'] ?? '';
+            $ts = $challengeDecoded['payload']['ts'] ?? '';
+
+            if (empty($nonce) || empty($ts)) {
+                return ['error' => true, 'message' => 'Gagal mendapatkan challenge nonce dari Funnel Gateway.'];
+            }
+
+            // 🔥 2. Hitung Signature Kriptografi V3 secara Real-time
+            $signature = $this->generateOpenClawSignature($nonce, $ts, $deviceToken);
+
+            // 3. Susun Connect Payload Sesuai Aturan Saklek Schema OpenClaw
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
                 "method" => "connect",
                 "params" => [
-                    "minProtocol" => 3,
+                    "minProtocol" => 4,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "web",        // ✅ Gunakan 'web' agar diizinkan membawa device identity biasa
+                        "id"       => "cli",       // ✅ Lolos enum allowed values
                         "version"  => "1.0.0",
                         "platform" => "linux",
-                        "mode"     => "operator"
+                        "mode"     => "operator"   // ✅ Lolos enum allowed values
                     ],
                     "device" => [
-                        "id"        => "php-backend-device", // Samakan dengan key yang ada di devices.json lu
-                        "publicKey" => "N/A"                 // Wajib ada untuk memenuhi syarat schema
+                        "id"        => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
+                        "publicKey" => "AFwoB9LySrRjA7xK5YrXRvjfi0rzvzXU4jSyb9XzayQ",
+                        "signature" => $signature,  // ✅ Properti wajib terpenuhi secara legal
+                        "signedAt"  => (int)$ts,
+                        "nonce"     => (string)$nonce
                     ],
                     "role"   => "operator",
                     "scopes" => ["operator.admin", "operator.read", "operator.write"],
                     "auth"   => [
-                        "password" => $_ENV['OPENCLAW_GATEWAY_PASSWORD'],
-                        "token"    => "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE"
+                        "password" => $password, // Syarat wajib gerbang luar Funnel mode
+                        "token"    => $deviceToken // Pembawa klaim hak akses internal
                     ]
                 ]
             ];
+
             $client->text(json_encode($connectPayload));
 
-            // 3. Ambil Response Auth
+            // 4. Ambal Sesi Validasi Auth
             $auth = $client->receive();
             file_put_contents('debug_openclaw.log', "AUTH RESPONSE:\n$auth\n\n", FILE_APPEND);
             $authDecoded = json_decode($auth, true);
 
             if (isset($authDecoded['ok']) && $authDecoded['ok'] === false) {
                 $client->close();
-                return ['error' => true, 'message' => 'Funnel Auth Gagal: ' . ($authDecoded['error']['message'] ?? 'Akses Ditolak')];
+                return ['error' => true, 'message' => 'Crypto Auth Gagal: ' . ($authDecoded['error']['message'] ?? 'Akses Ditolak')];
             }
 
-            // 4. Send Message Prompt (Gunakan alur first commit lu yang super stabil)
+            // 5. Send Message Prompt (Gunakan alur stream andalan commit pertama lu)
             $requestId = uniqid();
             $fullMessageString = $userMessage;
             if (!empty($systemPrompt)) {
@@ -384,7 +399,7 @@ class ChatController
 
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
 
-            // 5. Streaming Loop Response Handler
+            // 6. Streaming Loop Response Handler
             $aiTextResponse = "";
             while (true) {
                 $msg = $client->receive();
@@ -443,5 +458,25 @@ class ChatController
         } catch (\Throwable $e) {
             return ['error' => true, 'message' => $e->getMessage()];
         }
+    }
+
+    private function generateOpenClawSignature($nonce, $ts, $deviceToken)
+    {
+        $deviceId = "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b";
+        $clientId = "cli";
+        $platform = "linux";
+
+        // 🔑 Spesifikasi Canonical V3: deviceId:clientId:nonce:timestamp:platform
+        $messageToSign = sprintf(
+            "%s:%s:%s:%d:%s",
+            $deviceId,
+            $clientId,
+            $nonce,
+            (int)$ts,
+            $platform
+        );
+
+        // Hitung HMAC-SHA256 dengan Key = Device Token penguasa lu
+        return hash_hmac('sha256', $messageToSign, $deviceToken);
     }
 }
