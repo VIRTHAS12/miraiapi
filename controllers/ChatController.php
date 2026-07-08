@@ -306,18 +306,19 @@ class ChatController
     private function callOpenClaw($systemPrompt, $userMessage)
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
-        $password = trim($_ENV['OPENCLAW_GATEWAY_PASSWORD']);
+        // Menggunakan password sesuai dengan session runtime gateway lu saat ini
+        $password = trim($_ENV['OPENCLAW_GATEWAY_PASSWORD']); 
 
         try {
             $client = new \WebSocket\Client($apiUrl, [
-                'timeout' => 30,
+                'timeout' => 45, // Naikkan dikit biar gemini punya nafas lebih panjang saat berpikir
                 'fragment_size' => 4096
             ]);
 
-            // 1. Handshake Awal WebSocket
+            // 1. Handshake Awal
             $client->receive();
 
-            // 2. Connect payload
+            // 2. Connect payload (Satu array murni seperti cara cerdas lu di devices.json)
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -341,25 +342,14 @@ class ChatController
 
             $client->text(json_encode($connectPayload));
 
-            // 3. Validasi Auth
+            // 3. Auth Validation (Mengikuti gaya aman commit pertama lu brok)
             $auth = $client->receive();
             $authDecoded = json_decode($auth, true);
 
-            // Tembak juga ke stderr Railway buat cadangan
-            file_put_contents('php://stderr', "--- AUTH RESPONSE ---\n" . print_r($authDecoded, TRUE) . "\n");
-
-            // 🔴 DEBUG 1: Jika Autentikasi Gagal, muntahkan struktur balasan ke chat screen
-            if (!($authDecoded['ok'] ?? false)) {
+            // Gak usah pakai if ok jika ok tidak dikirim, tapi proteksi jika balasan mengembalikan error struktural
+            if (isset($authDecoded['type']) && $authDecoded['type'] === 'error') {
                 $client->close();
-                $prettyAuth = json_encode($authDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-                return [
-                    'choices' => [[
-                        'message' => [
-                            'role'    => 'assistant',
-                            'content' => "🛑 **[DEBUG EROR AUTH]** Gagal jabat tangan dengan OpenClaw Gateway, brok.\n\n```json\n" . $prettyAuth . "\n```"
-                        ]
-                    ]]
-                ];
+                return ['error' => true, 'message' => 'Auth Ditolak: ' . ($authDecoded['error']['errorMessage'] ?? 'Akses dilarang')];
             }
 
             // 4. Send Message
@@ -382,23 +372,21 @@ class ChatController
 
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
 
-            // 5. Streaming Loop Response Handler
+            // 5. Streaming Loop Response Handler (Diadopsi dari pola sukses commit pertama)
             $aiTextResponse = "";
-            $rawLogsCollected = []; // Kolektor payload buat pelacakan eror stream
 
             while (true) {
                 $msg = $client->receive();
                 if (!$msg) break;
 
                 $decoded = json_decode($msg, true);
-                $rawLogsCollected[] = $decoded;
 
-                // Abaikan ping/heartbeat dari gateway
+                // Lewati keep-alive frame
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
                     continue;
                 }
 
-                // Amankan pembacaan teks bertahap (Streaming Delta)
+                // Ambil text chunk delta
                 if (isset($decoded['type']) && $decoded['type'] === 'event') {
                     if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
 
@@ -411,7 +399,7 @@ class ChatController
                             $aiTextResponse .= $chunkText;
                         }
 
-                        // JIKA SESI SUDAH FINAL: Ambil teks utuh lalu break secara legal
+                        // Status final dari OpenClaw murni
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             if (isset($decoded['payload']['message']['content'][0]['text'])) {
                                 $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
@@ -425,63 +413,46 @@ class ChatController
                     }
                 }
 
-                // Validasi ID Request utama
+                // Cek feedback ID Request asli
                 if (isset($decoded['id']) && $decoded['id'] === $requestId) {
-                    // 🔴 DEBUG 2: Jika AI mengalami eksekusi crash di tengah jalan
+                    // Jika ada runtime error dari Gemini
                     if (isset($decoded['ok']) && $decoded['ok'] === false) {
                         $client->close();
-                        $prettyStreamError = json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-                        return [
-                            'choices' => [[
-                                'message' => [
-                                    'role'    => 'assistant',
-                                    'content' => "💥 **[DEBUG EROR RUNTIME AI]** Gemini/OpenClaw melempar eror saat memproses instruksi:\n\n```json\n" . $prettyStreamError . "\n```"
-                                ]
-                            ]]
-                        ];
+                        return ['error' => true, 'message' => $decoded['error']['message'] ?? 'Gemini Processing Failed'];
                     }
 
                     if (isset($decoded['payload']['message']['content'][0]['text'])) {
                         $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
                         break;
                     }
+
+                    // Pelindung andalan commit pertama: Hanya boleh break saat "ok" kalau teksnya udah beneran keisi semua
+                    if (isset($decoded['ok']) && $decoded['ok'] === true) {
+                        if (!empty($aiTextResponse)) {
+                            break;
+                        }
+                    }
                 }
             }
 
             $client->close();
 
-            // Kembalikan respon teks asli jika sukses
             if (!empty($aiTextResponse)) {
                 return [
-                    'choices' => [[
-                        'message' => [
-                            'role'    => 'assistant',
-                            'content' => trim($aiTextResponse)
+                    'choices' => [
+                        [
+                            'message' => [
+                                'role'    => 'assistant',
+                                'content' => trim($aiTextResponse)
+                            ]
                         ]
-                    ]]
+                    ]
                 ];
             }
 
-            // 🔴 DEBUG 3: Koneksi close mulus tapi data kosong melompong (Tarik sampel log terakhir)
-            $samplePayload = json_encode(end($rawLogsCollected), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-            return [
-                'choices' => [[
-                    'message' => [
-                        'role'    => 'assistant',
-                        'content' => "⚠️ **[DEBUG EMPTY TEXT]** Koneksi ditutup tanpa teks balasan. Payload terakhir yang diterima:\n\n```json\n" . $samplePayload . "\n```"
-                    ]
-                ]]
-            ];
+            return ['error' => true, 'message' => 'Gagal mengumpulkan serpihan teks streaming dari model AI.'];
         } catch (\Throwable $e) {
-            // 🔴 DEBUG 4: Tangkap eror fatal jaringan / driver websocket PHP
-            return [
-                'choices' => [[
-                    'message' => [
-                        'role'    => 'assistant',
-                        'content' => "🚨 **[DEBUG EXCEPTION PHP]** Gagal mengeksekusi request socket:\n\n`Minit-Error: " . $e->getMessage() . "`\n`File: " . $e->getFile() . " (Line: " . $e->getLine() . ")`"
-                    ]
-                ]]
-            ];
+            return ['error' => true, 'message' => 'Exception: ' . $e->getMessage()];
         }
     }
 }
