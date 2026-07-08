@@ -2,12 +2,13 @@
 
 namespace Controllers;
 
+
 use Model\UserModel;
 use Core\Database;
 use Core\JWT;
 use Google\Client as GoogleClient;
-use Google\Service\Oauth2 as GoogleOauth2;
-
+// ✅ Biarkan murni tanpa alias, atau hapus baris ini kalau di bawah pakai full backslash
+use Google\Service\Oauth2;
 class AuthController
 {
     private $userModel;
@@ -40,36 +41,23 @@ class AuthController
     }
 
     // 🔐 STEP 1: Redirect ke Google OAuth menggunakan Library Resmi
-    private function getAllowedOrigins(): array
-    {
-        return [
-            'http://localhost:8081',
-            'https://miraiplanner.pages.dev', // ganti/tambah domain production kamu
-        ];
-    }
-
-    private function isOriginAllowed(string $returnTo): bool
-    {
-        if ($returnTo === 'mobile') return true;
-        $parsed = parse_url($returnTo);
-        if (!$parsed || empty($parsed['scheme']) || empty($parsed['host'])) return false;
-        $origin = $parsed['scheme'] . '://' . $parsed['host'] . (isset($parsed['port']) ? ':' . $parsed['port'] : '');
-        return in_array($origin, $this->getAllowedOrigins(), true);
-    }
-
     public function loginWithGoogle()
     {
         $client = $this->getGoogleClient();
+
+        // Ambil target return URL dari frontend (Expo Web / Mobile via query param)
         $returnTo = $_GET['return_to'] ?? 'http://localhost:8081';
 
-        if (!$this->isOriginAllowed($returnTo)) {
-            return response('error', 'return_to tidak diizinkan.', null, 400);
-        }
-
-        $state = base64_encode(json_encode(['return_to' => $returnTo]));
+        // Simpan returnUrl ke dalam parameter state (Base64 Safe String)
+        $state = base64_encode(json_encode([
+            'return_to' => $returnTo
+        ]));
         $client->setState($state);
 
-        header("Location: " . $client->createAuthUrl());
+        // Bikin authorization URL resmi dari Google SDK
+        $authUrl = $client->createAuthUrl();
+
+        header("Location: " . $authUrl);
         exit();
     }
 
@@ -87,9 +75,6 @@ class AuthController
         $stateData = json_decode(base64_decode($state), true);
         $returnTo = $stateData['return_to'] ?? 'mobile';
 
-        if (!$this->isOriginAllowed($returnTo)) {
-            return response('error', 'return_to tidak valid.', null, 400);
-        }
         try {
             $client = $this->getGoogleClient();
 
@@ -104,7 +89,7 @@ class AuthController
             $client->setAccessToken($tokenData);
 
             // 🔍 Ambil informasi profile user menggunakan Service Oauth2 resmi
-            $googleOauth = new \Google\Service\Oauth2($client);
+            $googleOauth = new Oauth2($client);
             $userInfo = $googleOauth->userinfo->get();
 
             $googleId = $userInfo->id;

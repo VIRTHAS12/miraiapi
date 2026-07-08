@@ -318,7 +318,7 @@ class ChatController
             // 1. Handshake
             $client->receive();
 
-            // 2. Connect payload
+            // 2. Connect payload (DIUBAH: Hanya minta operator.read di awal)
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -332,9 +332,9 @@ class ChatController
                         "platform" => "linux",
                         "mode"     => "backend"
                     ],
-                    "role"         => "operator",
-                    "scopes" => ["operator.admin", "operator.read", "operator.write"],
-                    "auth"         => [
+                    "role"   => "operator",
+                    "scopes" => ["operator.read"], // Amankan jabat tangan awal
+                    "auth"   => [
                         "token" => $token
                     ]
                 ]
@@ -351,7 +351,27 @@ class ChatController
                 return ['error' => true, 'message' => 'Auth Client Gagal', 'raw' => $auth];
             }
 
-            // 4. Send Message
+            // ==================== BARU: LANGKAH 3.5 (UPGRADE SCOPE KE WRITE) ====================
+            $upgradePayload = [
+                "type"   => "req",
+                "id"     => uniqid(),
+                "method" => "scope.upgrade",
+                "params" => [
+                    "scopes" => ["operator.read", "operator.write"] // Naikkan level ke write memakai token master
+                ]
+            ];
+            $client->text(json_encode($upgradePayload));
+
+            $upgradeRes = $client->receive();
+            $upgradeDecoded = json_decode($upgradeRes, true);
+
+            if (!($upgradeDecoded['ok'] ?? false)) {
+                $client->close();
+                return ['error' => true, 'message' => 'Gagal Upgrade ke Scope Write', 'raw' => $upgradeRes];
+            }
+            // ===================================================================================
+
+            // 4. Send Message (Sekarang aman karena status sesi sudah "Write Allowed")
             $requestId = uniqid();
             $fullMessageString = $userMessage;
             if (!empty($systemPrompt)) {
@@ -371,7 +391,7 @@ class ChatController
 
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
 
-            // 5. Streaming Loop Response Handler (CRITICAL: CLEAN FROM DISK WRITE LOGGING)
+            // 5. Streaming Loop Response Handler
             $aiTextResponse = "";
 
             while (true) {
@@ -380,7 +400,6 @@ class ChatController
 
                 $decoded = json_decode($msg, true);
 
-                // Langsung skip frame tick/health keep-alive demi performa
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
                     continue;
                 }
@@ -397,7 +416,6 @@ class ChatController
                             $aiTextResponse .= $chunkText;
                         }
 
-                        // Jika keluar status final, segera amankan text dan paksa keluar loop
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             if (isset($decoded['payload']['message']['content'][0]['text'])) {
                                 $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
