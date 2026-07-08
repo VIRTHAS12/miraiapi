@@ -307,135 +307,67 @@ class ChatController
         return response('success', 'Riwayat chat asisten berhasil dimuat.', $formattedData);
     }
 
-    // 🔧 HELPER CALL OPENCLAW
     private function callOpenClaw($systemPrompt, $userMessage)
     {
-        // Pastikan di env Railway lu nilainya menggunakan: wss://argonaut.taild01a64.ts.net
+        // 1. Konversi URL dari wss:// atau ws:// menjadi https:// resmi publik
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
-        $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
+        $apiUrl = str_replace(['wss://', 'ws://'], ['https://', 'http://'], $apiUrl);
+
+        // Targetkan langsung ke endpoint resmi REST API chat OpenClaw
+        $endpoint = rtrim($apiUrl, '/') . '/v1/chat/send';
+
+        // Token master 270fa... lu yang ada di openclaw.json
+        $token = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
+
+        // 2. Susun payload pesan sesuai dengan format API OpenClaw
+        $fullMessageString = $userMessage;
+        if (!empty($systemPrompt)) {
+            $fullMessageString = "[System Instruction: " . $systemPrompt . "]\nUser Message: " . $userMessage;
+        }
+
+        $payload = [
+            "sessionKey"     => "agent:main:main",
+            "idempotencyKey" => uniqid('idemp_', true),
+            "message"        => (string)$fullMessageString
+        ];
 
         try {
-            // 🔥 KUNCI UTAMA: Tembak via HTTPS/WSS dengan bypass verifikasi SSL
-            $client = new \WebSocket\Client($apiUrl, [
-                'timeout' => 60,
-                'context' => stream_context_create([
-                    'ssl' => [
-                        'verify_peer'       => false,
-                        'verify_peer_name'  => false,
-                        'allow_self_signed' => true
-                    ]
-                ])
+            // 3. Inisialisasi cURL
+            $ch = curl_init($endpoint);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+            curl_setopt($ch, CURLOPT_TIMEOUT, 45);
+
+            // 🔥 SENJATA PAMUNGKAS: Matikan verifikasi SSL total agar cURL Railway gak rewel
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+
+            // Kirim otentikasi token via Header sesuai dokumentasi resmi HTTP API
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $token,
+                'X-API-KEY: ' . $token
             ]);
 
-            // 1. Handshake awal dari Tailscale Serve + OpenClaw
-            $handshake = $client->receive();
-            file_put_contents('debug_openclaw.log', "HANDSHAKE:\n$handshake\n\n", FILE_APPEND);
+            $responseStr = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
 
-            // 2. Connect payload murni approved loopback bypass
-            $connectPayload = [
-                "type"   => "req",
-                "id"     => uniqid(),
-                "method" => "connect",
-                "params" => [
-                    "minProtocol" => 3,
-                    "maxProtocol" => 4,
-                    "client"      => [
-                        "id"       => "gateway-client",
-                        "version"  => "1.0.0",
-                        "platform" => "linux",
-                        "mode"     => "backend"
-                    ],
-                    "role"   => "operator",
-                    "scopes" => ["operator.admin", "operator.read", "operator.write"],
-                    "auth"   => [
-                        "token" => $token
-                    ]
-                ]
-            ];
+            // Log untuk kebutuhan debug lokal lu jika ada kendala
+            file_put_contents('debug_openclaw_http.log', "HTTP CODE: $httpCode | RESPONSE: $responseStr\n\n", FILE_APPEND);
 
-            $client->text(json_encode($connectPayload));
-
-            // 3. Terima Hello-Ok Auth
-            $auth = $client->receive();
-            file_put_contents('debug_openclaw.log', "AUTH:\n$auth\n\n", FILE_APPEND);
-            $authDecoded = json_decode($auth, true);
-
-            if (!($authDecoded['ok'] ?? false)) {
-                $client->close();
-                return ['error' => true, 'message' => 'Auth Client Gagal', 'raw' => $auth];
+            if ($httpCode !== 200) {
+                return ['error' => true, 'message' => "Gateway HTTP Error ($httpCode): $responseStr"];
             }
 
-            // 4. Send Message Prompt
-            $requestId = uniqid();
-            $fullMessageString = $userMessage;
-            if (!empty($systemPrompt)) {
-                $fullMessageString = "[System Instruction: " . $systemPrompt . "]\nUser Message: " . $userMessage;
-            }
+            $decoded = json_decode($responseStr, true);
 
-            $chatPayload = [
-                "type"   => "req",
-                "id"     => $requestId,
-                "method" => "chat.send",
-                "params" => [
-                    "sessionKey"     => "agent:main:main",
-                    "idempotencyKey" => uniqid('idemp_', true),
-                    "message"        => (string) $fullMessageString
-                ]
-            ];
-
-            $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
-            file_put_contents('debug_openclaw.log', "PROMPT SENT\n", FILE_APPEND);
-
-            // 5. Streaming Loop Response Handler (Anti Gantung)
-            $aiTextResponse = "";
-            while (true) {
-                $msg = $client->receive();
-                if (!$msg) break;
-
-                file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
-                $decoded = json_decode($msg, true);
-
-                if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
-                    continue;
-                }
-
-                if (isset($decoded['type']) && $decoded['type'] === 'event') {
-                    if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
-
-                        $chunkText = $decoded['payload']['deltaText']
-                            ?? $decoded['payload']['data']['text']
-                            ?? $decoded['payload']['data']['delta']
-                            ?? '';
-
-                        if (!empty($chunkText)) {
-                            $aiTextResponse .= $chunkText;
-                        }
-
-                        if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
-                            if (isset($decoded['payload']['message']['content'][0]['text'])) {
-                                $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
-                            }
-                            break;
-                        }
-
-                        if (isset($decoded['payload']['done']) && $decoded['payload']['done'] === true) {
-                            break;
-                        }
-                    }
-                }
-
-                if (isset($decoded['id']) && $decoded['id'] === $requestId) {
-                    if (isset($decoded['payload']['message']['content'][0]['text'])) {
-                        $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
-                        break;
-                    }
-                    if ($decoded['ok'] ?? false) {
-                        if (!empty($aiTextResponse)) break;
-                    }
-                }
-            }
-
-            $client->close();
+            // Ambal balik teks dari Gemini/OpenClaw response
+            $aiTextResponse = $decoded['payload']['message']['content'][0]['text']
+                ?? $decoded['message']['content']
+                ?? $decoded['text']
+                ?? '';
 
             if (!empty($aiTextResponse)) {
                 return [
@@ -448,9 +380,9 @@ class ChatController
                 ];
             }
 
-            return ['error' => true, 'message' => 'Sesi chat selesai tanpa mengembalikan output teks.'];
+            return ['error' => true, 'message' => 'REST API tidak mengembalikan output teks.', 'raw' => $responseStr];
         } catch (\Throwable $e) {
-            return ['error' => true, 'message' => $e->getMessage()];
+            return ['error' => true, 'message' => 'HTTP Exception: ' . $e->getMessage()];
         }
     }
 }
