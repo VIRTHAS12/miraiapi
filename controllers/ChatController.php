@@ -111,7 +111,7 @@ class ChatController
         }
 
         // ========================================================
-        // 🔀 PERCABANGAN AKSI: CREATE VS UPDATE VS DELETE
+        // 🔀 PERCABANGAN AKSI: CREATE VS UPDATE
         // ========================================================
         $calendarController = new \Controllers\CalendarController();
 
@@ -183,6 +183,7 @@ class ChatController
             $googleResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
             // 🔥 DETEKSI CLASH SAAT UPDATE
+            // Karena updateEvent() mengembalikan format response() standar, kita cek HTTP status atau isi bodynya
             $responseData = json_decode($googleResponse->getBody(), true);
             if (isset($responseData['status']) && $responseData['status'] === 'error') {
                 $clashMessage = $responseData['message'] ?? "Gagal update jadwal karena bentrok, brok.";
@@ -191,7 +192,7 @@ class ChatController
                     'role'    => 'assistant',
                     'content' => $clashMessage
                 ]);
-                return $googleResponse;
+                return $googleResponse; // Teruskan response error 409 ke frontend
             }
 
             $timeStartStr = date('H:i', strtotime($parsed['start']));
@@ -215,6 +216,7 @@ class ChatController
 
             // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
+            // 🔥 JALANKAN DULU fungsinya, jangan langsung simpan pesan sukses ke DB!
             $eventResponse = $calendarController->createEventFromAI(
                 $user,
                 $parsed['title'],
@@ -240,7 +242,7 @@ class ChatController
                 return response('error', $eventResponse['message'], $eventResponse['raw'], 500);
             }
 
-            // JIKA SELESAI DAN SUKSES, SIMPAN KE DB
+            // JIKA SELESAI DAN SUKSES, BARU SIMPAN PESAN SUKSES KE DB CHAT
             $successMessage = "Berhasil menjadwalkan kegiatan: " . $parsed['title'] . " ✅";
             $this->chatModel->saveMessage([
                 'user_id' => $user['id'],
@@ -254,7 +256,6 @@ class ChatController
             ]);
         }
     }
-
     // 📜 METHOD LOGIC HISTORY
     public function history()
     {
@@ -271,12 +272,16 @@ class ChatController
             if ($chat['role'] === 'assistant') {
                 $extractedTitle = null;
 
+                // 🔥 REGEX 1: Deteksi kalimat sukses Create (Bisa handle centang/emoji di ujung)
                 if (preg_match('/Berhasil menjadwalkan kegiatan:\s*(.+?)(?:\s*✅)?$/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
-                } elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
+                }
+                // 🔥 REGEX 2: Deteksi kalimat sukses Update agar dapet card juga pas dimuat ulang
+                elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
                 }
 
+                // Jika judul berhasil ditarik, cari object-nya di list event user
                 if ($extractedTitle) {
                     foreach ($userEvents as $evt) {
                         if (strtolower($evt['title']) === strtolower($extractedTitle)) {
@@ -302,23 +307,20 @@ class ChatController
         return response('success', 'Riwayat chat asisten berhasil dimuat.', $formattedData);
     }
 
-    // 🔧 HELPER CALL OPENCLAW (OPTIMIZED & CLEAN FROM FILE I/O BLOCKING)
+    // 🔧 HELPER CALL OPENCLAW
     private function callOpenClaw($systemPrompt, $userMessage)
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
-        // Menggunakan password sesuai dengan session runtime gateway lu saat ini
-        $password = trim($_ENV['OPENCLAW_GATEWAY_PASSWORD']); 
+        $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
 
         try {
-            $client = new \WebSocket\Client($apiUrl, [
-                'timeout' => 45, // Naikkan dikit biar gemini punya nafas lebih panjang saat berpikir
-                'fragment_size' => 4096
-            ]);
+            $client = new \WebSocket\Client($apiUrl, ['timeout' => 60]);
 
-            // 1. Handshake Awal
-            $client->receive();
+            // 1. Handshake
+            $handshake = $client->receive();
+            file_put_contents('debug_openclaw.log', "HANDSHAKE:\n$handshake\n\n", FILE_APPEND);
 
-            // 2. Connect payload (Satu array murni seperti cara cerdas lu di devices.json)
+            // 2. Connect payload
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -332,24 +334,24 @@ class ChatController
                         "platform" => "linux",
                         "mode"     => "backend"
                     ],
-                    "role"   => "operator",
-                    "scopes" => ["operator.read", "operator.admin", "operator.write"],
-                    "auth"   => [
-                        "password" => $password
+                    "role"         => "operator",
+                    "scopes"       => ["operator.admin", "operator.read", "operator.write"],
+                    "auth"         => [
+                        "token" => $token
                     ]
                 ]
             ];
 
             $client->text(json_encode($connectPayload));
 
-            // 3. Auth Validation (Mengikuti gaya aman commit pertama lu brok)
+            // 3. Auth
             $auth = $client->receive();
+            file_put_contents('debug_openclaw.log', "AUTH:\n$auth\n\n", FILE_APPEND);
             $authDecoded = json_decode($auth, true);
 
-            // Gak usah pakai if ok jika ok tidak dikirim, tapi proteksi jika balasan mengembalikan error struktural
-            if (isset($authDecoded['type']) && $authDecoded['type'] === 'error') {
+            if (!($authDecoded['ok'] ?? false)) {
                 $client->close();
-                return ['error' => true, 'message' => 'Auth Ditolak: ' . ($authDecoded['error']['errorMessage'] ?? 'Akses dilarang')];
+                return ['error' => true, 'message' => 'Auth Client Gagal', 'raw' => $auth];
             }
 
             // 4. Send Message
@@ -371,22 +373,23 @@ class ChatController
             ];
 
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
+            file_put_contents('debug_openclaw.log', "PROMPT SENT\n", FILE_APPEND);
 
-            // 5. Streaming Loop Response Handler (Diadopsi dari pola sukses commit pertama)
+            // 5. Streaming Loop Response Handler (Anti Gantung)
             $aiTextResponse = "";
 
             while (true) {
                 $msg = $client->receive();
                 if (!$msg) break;
 
+                file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
                 $decoded = json_decode($msg, true);
 
-                // Lewati keep-alive frame
+                // Langsung skip jika frame hanya berupa tick/health keep-alive
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
                     continue;
                 }
 
-                // Ambil text chunk delta
                 if (isset($decoded['type']) && $decoded['type'] === 'event') {
                     if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
 
@@ -399,7 +402,7 @@ class ChatController
                             $aiTextResponse .= $chunkText;
                         }
 
-                        // Status final dari OpenClaw murni
+                        // Jika keluar status final, segera amankan text dan paksa keluar loop
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             if (isset($decoded['payload']['message']['content'][0]['text'])) {
                                 $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
@@ -413,24 +416,13 @@ class ChatController
                     }
                 }
 
-                // Cek feedback ID Request asli
                 if (isset($decoded['id']) && $decoded['id'] === $requestId) {
-                    // Jika ada runtime error dari Gemini
-                    if (isset($decoded['ok']) && $decoded['ok'] === false) {
-                        $client->close();
-                        return ['error' => true, 'message' => $decoded['error']['message'] ?? 'Gemini Processing Failed'];
-                    }
-
                     if (isset($decoded['payload']['message']['content'][0]['text'])) {
                         $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
                         break;
                     }
-
-                    // Pelindung andalan commit pertama: Hanya boleh break saat "ok" kalau teksnya udah beneran keisi semua
-                    if (isset($decoded['ok']) && $decoded['ok'] === true) {
-                        if (!empty($aiTextResponse)) {
-                            break;
-                        }
+                    if ($decoded['ok'] ?? false) {
+                        if (!empty($aiTextResponse)) break;
                     }
                 }
             }
@@ -450,9 +442,9 @@ class ChatController
                 ];
             }
 
-            return ['error' => true, 'message' => 'Gagal mengumpulkan serpihan teks streaming dari model AI.'];
+            return ['error' => true, 'message' => 'Sesi chat selesai tanpa mengembalikan output teks.'];
         } catch (\Throwable $e) {
-            return ['error' => true, 'message' => 'Exception: ' . $e->getMessage()];
+            return ['error' => true, 'message' => $e->getMessage()];
         }
     }
 }
