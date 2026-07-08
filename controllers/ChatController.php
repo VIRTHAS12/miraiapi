@@ -309,17 +309,14 @@ class ChatController
 
     private function callOpenClaw($systemPrompt, $userMessage)
     {
-        // 1. Konversi URL dari wss:// atau ws:// menjadi https:// resmi publik
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
         $apiUrl = str_replace(['wss://', 'ws://'], ['https://', 'http://'], $apiUrl);
 
-        // Targetkan langsung ke endpoint resmi REST API chat OpenClaw
-        $endpoint = rtrim($apiUrl, '/') . '/v1/chat/send';
+        // 🔥 UBAH DI SINI: Singkirkan /v1/ dan langsung tembak /chat/send
+        $endpoint = rtrim($apiUrl, '/') . '/chat/send';
 
-        // Token master 270fa... lu yang ada di openclaw.json
         $token = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
 
-        // 2. Susun payload pesan sesuai dengan format API OpenClaw
         $fullMessageString = $userMessage;
         if (!empty($systemPrompt)) {
             $fullMessageString = "[System Instruction: " . $systemPrompt . "]\nUser Message: " . $userMessage;
@@ -332,18 +329,15 @@ class ChatController
         ];
 
         try {
-            // 3. Inisialisasi cURL
             $ch = curl_init($endpoint);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
             curl_setopt($ch, CURLOPT_TIMEOUT, 45);
 
-            // 🔥 SENJATA PAMUNGKAS: Matikan verifikasi SSL total agar cURL Railway gak rewel
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
             curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
 
-            // Kirim otentikasi token via Header sesuai dokumentasi resmi HTTP API
             curl_setopt($ch, CURLOPT_HTTPHEADER, [
                 'Content-Type: application/json',
                 'Authorization: Bearer ' . $token,
@@ -354,8 +348,27 @@ class ChatController
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
 
-            // Log untuk kebutuhan debug lokal lu jika ada kendala
             file_put_contents('debug_openclaw_http.log', "HTTP CODE: $httpCode | RESPONSE: $responseStr\n\n", FILE_APPEND);
+
+            // 💡 JIKA MASIH 404, KITA COBA FALLBACK AUTOMATIS KE /api/v1/chat/send
+            if ($httpCode === 404) {
+                $fallbackEndpoint = rtrim($apiUrl, '/') . '/api/v1/chat/send';
+                $ch = curl_init($fallbackEndpoint);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+                curl_setopt($ch, CURLOPT_TIMEOUT, 45);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                    'Content-Type: application/json',
+                    'Authorization: Bearer ' . $token,
+                    'X-API-KEY: ' . $token
+                ]);
+                $responseStr = curl_exec($ch);
+                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+            }
 
             if ($httpCode !== 200) {
                 return ['error' => true, 'message' => "Gateway HTTP Error ($httpCode): $responseStr"];
@@ -363,7 +376,6 @@ class ChatController
 
             $decoded = json_decode($responseStr, true);
 
-            // Ambal balik teks dari Gemini/OpenClaw response
             $aiTextResponse = $decoded['payload']['message']['content'][0]['text']
                 ?? $decoded['message']['content']
                 ?? $decoded['text']
