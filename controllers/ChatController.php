@@ -312,82 +312,60 @@ class ChatController
 
     private function callOpenClaw($systemPrompt, $userMessage)
     {
-        $apiUrl = $_ENV['OPENCLAW_API_URL'];
-        $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
+        $apiUrl = $_ENV['OPENCLAW_API_URL']; // URL Funnel wss://...
+        // Sesuai dokumen: Funnel wajib pakai password terkuat lu
+        $password = trim($_ENV['OPENCLAW_GATEWAY_PASSWORD']);
 
         try {
-            // 💡 SOLUSI UTAMA: Kirim token via HTTP Headers saat jabat tangan awal WebSocket
+            // Koneksi murni tanpa modifikasi header (karena funnel mengabaikan identity header)
             $client = new \WebSocket\Client($apiUrl, [
                 'timeout' => 45,
-                'fragment_size' => 4096,
-                'headers' => [
-                    'X-API-KEY'     => $token,            // Metode Otentikasi Utama OpenClaw
-                    'Authorization' => 'Bearer ' . $token, // Metode Otentikasi Fallback
-                ]
+                'fragment_size' => 4096
             ]);
 
-            // 1. Handshake (Akan otomatis lolos tanpa memicu challenge jika header valid)
+            // 1. Terima event challenge awal dari OpenClaw Funnel
+            $challenge = $client->receive();
 
-            $handshake = $client->receive();
-            file_put_contents('debug_openclaw.log', "HANDSHAKE RECEIVED:\n$handshake\n\n", FILE_APPEND);
-
-            // 2. Connect payload (Sederhana: Langsung lempar Device ID dan Token Mentah)
-            $handshakeDecoded = json_decode($handshake, true);
-            $nonce = $handshakeDecoded['payload']['nonce'] ?? '';
-            $ts = $handshakeDecoded['payload']['ts'] ?? '';
-
-            // 💡 PERBAIKAN URUTAN & FORMAT STRING (Ditambahkan pemisah ':' sesuai protokol)
-            //$messageToSign = $nonce . ":" . $ts;
-
-            // 💡 FORMAT ALTERNATIF (Jika di atas masih gagal, OpenClaw kadang meminta timestamp dulu baru nonce):
-            $messageToSign = $ts . ":" . $nonce;
-
-            // Hitung ulang signature menggunakan token perangkat Anda
-            $signature = hash_hmac('sha256', $messageToSign, "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE");
-
-            // 2. Connect payload (Gunakan $signature hasil rumus baru)
+            // 2. Susun Connect Payload berbasis PASSWORD + DEVICE ID
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
                 "method" => "connect",
                 "params" => [
-                    "minProtocol" => 3,
+                    "minProtocol" => 4,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "cli",
+                        "id"       => "php-backend",
                         "version"  => "1.0.0",
                         "platform" => "linux",
-                        "mode"     => "backend"
+                        "mode"     => "operator"
                     ],
                     "device" => [
-                        "id"        => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
-                        "publicKey" => "AFwoB9LySrRjA7xK5YrXRvjfi0rzvzXU4jSyb9XzayQ",
-                        "signature" => $signature,
-                        "signedAt"  => (int)$ts,
-                        "nonce"     => (string)$nonce
+                        // ID tepercaya yang sudah lu daftarkan/suntik manual di devices.json lokal
+                        "id" => "php-backend-device"
                     ],
-                    "role"         => "operator",
-                    "scopes"       => ["operator.admin", "operator.read", "operator.write"],
-                    "auth"         => [                        // ✅ LANGSUNG MASUKKAN DEVICE ID & TOKEN MENTAH SESUAI PENDAPAT LU
-                        "token"    => "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE"
+                    "role"   => "operator",
+                    "scopes" => ["operator.admin", "operator.read", "operator.write"],
+                    "auth"   => [
+                        // Sesuai dokumen: Pasang password auth di sini!
+                        "password" => $password
                     ]
                 ]
             ];
 
             $client->text(json_encode($connectPayload));
 
-
             // 3. Ambil Response Auth
             $auth = $client->receive();
             file_put_contents('debug_openclaw.log', "AUTH RESPONSE:\n$auth\n\n", FILE_APPEND);
             $authDecoded = json_decode($auth, true);
 
-            if (!($authDecoded['ok'] ?? false)) {
+            if (isset($authDecoded['ok']) && $authDecoded['ok'] === false) {
                 $client->close();
-                return ['error' => true, 'message' => 'Auth Client Gagal', 'raw' => $auth];
+                return ['error' => true, 'message' => 'Funnel Auth Gagal: ' . ($authDecoded['error']['message'] ?? 'Akses Ditolak')];
             }
 
-            // 4. Send Message Prompt
+            // 4. Send Message Prompt (Gunakan alur first commit lu yang super stabil)
             $requestId = uniqid();
             $fullMessageString = $userMessage;
             if (!empty($systemPrompt)) {
@@ -406,26 +384,21 @@ class ChatController
             ];
 
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
-            file_put_contents('debug_openclaw.log', "PROMPT SENT\n", FILE_APPEND);
 
             // 5. Streaming Loop Response Handler
             $aiTextResponse = "";
-
             while (true) {
                 $msg = $client->receive();
                 if (!$msg) break;
 
-                file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
                 $decoded = json_decode($msg, true);
 
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
-                    $client->text(json_encode(["type" => "pong"]));
                     continue;
                 }
 
                 if (isset($decoded['type']) && $decoded['type'] === 'event') {
                     if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
-
                         $chunkText = $decoded['payload']['deltaText']
                             ?? $decoded['payload']['data']['text']
                             ?? $decoded['payload']['data']['delta']
@@ -436,8 +409,8 @@ class ChatController
                         }
 
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
-                            if (isset($decoded['payload']['message']['content']['text'])) {
-                                $aiTextResponse = $decoded['payload']['message']['content']['text'];
+                            if (isset($decoded['payload']['message']['content'][0]['text'])) {
+                                $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
                             }
                             break;
                         }
@@ -449,8 +422,8 @@ class ChatController
                 }
 
                 if (isset($decoded['id']) && $decoded['id'] === $requestId) {
-                    if (isset($decoded['payload']['message']['content']['text'])) {
-                        $aiTextResponse = $decoded['payload']['message']['content']['text'];
+                    if (isset($decoded['payload']['message']['content'][0]['text'])) {
+                        $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
                         break;
                     }
                     if ($decoded['ok'] ?? false) {
@@ -460,21 +433,14 @@ class ChatController
             }
 
             $client->close();
-
-            if (!empty($aiTextResponse)) {
-                return [
-                    'choices' => [
-                        [
-                            'message' => [
-                                'role'    => 'assistant',
-                                'content' => trim($aiTextResponse)
-                            ]
-                        ]
+            return [
+                'choices' => [[
+                    'message' => [
+                        'role'    => 'assistant',
+                        'content' => trim($aiTextResponse)
                     ]
-                ];
-            }
-
-            return ['error' => true, 'message' => 'Sesi chat selesai tanpa mengembalikan output teks.'];
+                ]]
+            ];
         } catch (\Throwable $e) {
             return ['error' => true, 'message' => $e->getMessage()];
         }
