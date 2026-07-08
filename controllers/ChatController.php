@@ -329,20 +329,17 @@ class ChatController
                     "minProtocol" => 4,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "cli",       // ✅ Gunakan id allowed resmi CLI
-                        "version"  => "1.2.3",
+                        "id"       => "gateway-client",
+                        "version"  => "1.0.0",
                         "platform" => "linux",
-                        "mode"     => "cli"        // ✅ Gunakan mode allowed resmi CLI
+                        "mode"     => "backend"
                     ],
-                    "device" => [
-                        // ✅ Tembak ID device CLI lu yang terdaftar di paired.json
-                        "id" => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b"
-                    ],
+                    // ❌ HAPUS TOTAL OBJEK "device" biar gak rewel minta publicKey atau signature!
                     "role"   => "operator",
-                    "scopes" => ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
+                    "scopes" => ["operator.admin", "operator.read", "operator.write"],
                     "auth"   => [
-                        // 🔥 Gunakan token operator yang nempel di device CLI lu!
-                        "token" => "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE"
+                        // Gunakan token master 270fa... yang lu temukan di openclaw.json
+                        "token" => $_ENV['OPENCLAW_GATEWAY_TOKEN']
                     ]
                 ]
             ];
