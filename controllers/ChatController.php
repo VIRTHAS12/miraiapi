@@ -336,10 +336,16 @@ class ChatController
             $nonce = $handshakeDecoded['payload']['nonce'] ?? '';
             $ts = $handshakeDecoded['payload']['ts'] ?? '';
 
-            // Hitung signature menggunakan Token Perangkat
-            $signature = hash_hmac('sha256', $nonce . $ts, "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE");
+            // 💡 PERBAIKAN URUTAN & FORMAT STRING (Ditambahkan pemisah ':' sesuai protokol)
+            $messageToSign = $nonce . ":" . $ts;
 
-            // 2. Connect payload (Lengkap: id, publicKey, signature, signedAt, dan nonce!)
+            // 💡 FORMAT ALTERNATIF (Jika di atas masih gagal, OpenClaw kadang meminta timestamp dulu baru nonce):
+            // $messageToSign = $ts . ":" . $nonce;
+
+            // Hitung ulang signature menggunakan token perangkat Anda
+            $signature = hash_hmac('sha256', $messageToSign, "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE");
+
+            // 2. Connect payload (Gunakan $signature hasil rumus baru)
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -358,7 +364,6 @@ class ChatController
                         "publicKey" => "AFwoB9LySrRjA7xK5YrXRvjfi0rzvzXU4jSyb9XzayQ",
                         "signature" => $signature,
                         "signedAt"  => (int)$ts,
-                        // ✅ SUNTIKAN TERAKHIR: Masukkan string nonce dari handshake
                         "nonce"     => (string)$nonce
                     ],
                     "role"         => "operator",
