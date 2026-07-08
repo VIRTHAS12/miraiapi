@@ -347,6 +347,8 @@ class ChatController
             $auth = $client->receive();
             $authDecoded = json_decode($auth, true);
 
+            // 🔍 Tambahkan baris ini untuk debug di terminal / log PHP Anda:
+            file_put_contents('php://stderr', print_r($authDecoded, TRUE));
             // Pastikan response sukses dan tidak mengembalikan error scope
             if (!($authDecoded['ok'] ?? false)) {
                 $client->close();
