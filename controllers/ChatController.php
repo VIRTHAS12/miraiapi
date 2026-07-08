@@ -334,7 +334,7 @@ class ChatController
                         "mode"     => "backend"
                     ],
                     "role"   => "operator",
-                    "scopes" => ["operator.read"], ["operator.admin"], // Amankan jabat tangan awal
+                    "scopes" => ["operator.read, operator.admin"],
                     "auth"   => [
                         "password" => $password
                     ]
