@@ -307,6 +307,7 @@ class ChatController
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
         $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
+        $password = trim($_ENV['OPENCLAW_GATEWAY_PASSWORD']);
 
         try {
             // Ditambahkan timeout & opsi network optimization
@@ -335,7 +336,7 @@ class ChatController
                     "role"   => "operator",
                     "scopes" => ["operator.read"], // Amankan jabat tangan awal
                     "auth"   => [
-                        "token" => $token
+                        "password" => $password
                     ]
                 ]
             ];
