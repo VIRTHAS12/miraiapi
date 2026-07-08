@@ -306,7 +306,6 @@ class ChatController
     private function callOpenClaw($systemPrompt, $userMessage)
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
-        $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
         $password = trim($_ENV['OPENCLAW_GATEWAY_PASSWORD']);
 
         try {
@@ -316,10 +315,10 @@ class ChatController
                 'fragment_size' => 4096
             ]);
 
-            // 1. Handshake
+            // 1. Handshake Awal WebSocket
             $client->receive();
 
-            // 2. Connect payload (DIUBAH: Hanya minta operator.read di awal)
+            // 2. Connect payload (Minta semua scope sekaligus dengan format array yang benar)
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -334,7 +333,8 @@ class ChatController
                         "mode"     => "backend"
                     ],
                     "role"   => "operator",
-                    "scopes" => ["operator.read, operator.admin"],
+                    // ✅ PERBAIKAN: Format array diperbaiki & langsung minta write akses
+                    "scopes" => ["operator.read", "operator.admin", "operator.write"],
                     "auth"   => [
                         "password" => $password
                     ]
@@ -343,36 +343,21 @@ class ChatController
 
             $client->text(json_encode($connectPayload));
 
-            // 3. Auth
+            // 3. Validasi Auth
             $auth = $client->receive();
             $authDecoded = json_decode($auth, true);
 
+            // Pastikan response sukses dan tidak mengembalikan error scope
             if (!($authDecoded['ok'] ?? false)) {
                 $client->close();
-                return ['error' => true, 'message' => 'Auth Client Gagal', 'raw' => $auth];
+                return ['error' => true, 'message' => 'Auth Client Gagal atau Scope Ditolak', 'raw' => $auth];
             }
 
-            // ==================== BARU: LANGKAH 3.5 (UPGRADE SCOPE KE WRITE) ====================
-            $upgradePayload = [
-                "type"   => "req",
-                "id"     => uniqid(),
-                "method" => "scope.upgrade",
-                "params" => [
-                    "scopes" => ["operator.read", "operator.admin", "operator.write"] // Naikkan level ke write memakai token master
-                ]
-            ];
-            $client->text(json_encode($upgradePayload));
-
-            $upgradeRes = $client->receive();
-            $upgradeDecoded = json_decode($upgradeRes, true);
-
-            if (!($upgradeDecoded['ok'] ?? false)) {
-                $client->close();
-                return ['error' => true, 'message' => 'Gagal Upgrade ke Scope Write', 'raw' => $upgradeRes];
-            }
+            // ===================================================================================
+            // ✅ LANGKAH SCOPE.UPGRADE DIHAPUS karena sudah di-request secara legal di atas.
             // ===================================================================================
 
-            // 4. Send Message (Sekarang aman karena status sesi sudah "Write Allowed")
+            // 4. Send Message (Langsung kirim karena status sesi sudah Authorized penuh)
             $requestId = uniqid();
             $fullMessageString = $userMessage;
             if (!empty($systemPrompt)) {
@@ -419,7 +404,7 @@ class ChatController
                             $aiTextResponse .= $chunkText;
                         }
 
-                        // ✅ JIKA SESI SUDAH FINAL: Ambil teks utuh lalu break secara legal
+                        // JIKA SESI SUDAH FINAL: Ambil teks utuh lalu break secara legal
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             if (isset($decoded['payload']['message']['content'][0]['text'])) {
                                 $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
@@ -433,14 +418,13 @@ class ChatController
                     }
                 }
 
-                // ✅ PENGAMAN TAMBAHAN: Validasi ID Request utama
+                // Validasi ID Request utama
                 if (isset($decoded['id']) && $decoded['id'] === $requestId) {
-                    // Jika ada error internal dari model AI OpenClaw
                     if (isset($decoded['ok']) && $decoded['ok'] === false) {
+                        $client->close();
                         return ['error' => true, 'message' => $decoded['error']['message'] ?? 'OpenClaw execution error'];
                     }
-                    
-                    // Jika mengembalikan data text instan non-stream
+
                     if (isset($decoded['payload']['message']['content'][0]['text'])) {
                         $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
                         break;
