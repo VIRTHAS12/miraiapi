@@ -310,23 +310,34 @@ class ChatController
     // 🔧 HELPER CALL OPENCLAW
     private function callOpenClaw($systemPrompt, $userMessage)
     {
+        // Pastikan di env Railway lu nilainya menggunakan: wss://argonaut.taild01a64.ts.net
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
         $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
 
         try {
-            $client = new \WebSocket\Client($apiUrl, ['timeout' => 60]);
+            // 🔥 KUNCI UTAMA: Tembak via HTTPS/WSS dengan bypass verifikasi SSL
+            $client = new \WebSocket\Client($apiUrl, [
+                'timeout' => 60,
+                'context' => stream_context_create([
+                    'ssl' => [
+                        'verify_peer'       => false,
+                        'verify_peer_name'  => false,
+                        'allow_self_signed' => true
+                    ]
+                ])
+            ]);
 
-            // 1. Handshake
+            // 1. Handshake awal dari Tailscale Serve + OpenClaw
             $handshake = $client->receive();
             file_put_contents('debug_openclaw.log', "HANDSHAKE:\n$handshake\n\n", FILE_APPEND);
 
-            // 2. Connect payload
+            // 2. Connect payload murni approved loopback bypass
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
                 "method" => "connect",
                 "params" => [
-                    "minProtocol" => 4,
+                    "minProtocol" => 3,
                     "maxProtocol" => 4,
                     "client"      => [
                         "id"       => "gateway-client",
@@ -334,18 +345,17 @@ class ChatController
                         "platform" => "linux",
                         "mode"     => "backend"
                     ],
-                    // ❌ HAPUS TOTAL OBJEK DEVICE (Bebas dari todongan publicKey/signature)
                     "role"   => "operator",
                     "scopes" => ["operator.admin", "operator.read", "operator.write"],
                     "auth"   => [
-                        // Masukkan token master 270fa... lu yang valid di openclaw.json
-                        "token" => "270fa1ae6ef6aa5e08bddc17857172c4fe9a2bcd6970b55e"
+                        "token" => $token
                     ]
                 ]
             ];
+
             $client->text(json_encode($connectPayload));
 
-            // 3. Auth
+            // 3. Terima Hello-Ok Auth
             $auth = $client->receive();
             file_put_contents('debug_openclaw.log', "AUTH:\n$auth\n\n", FILE_APPEND);
             $authDecoded = json_decode($auth, true);
@@ -355,7 +365,7 @@ class ChatController
                 return ['error' => true, 'message' => 'Auth Client Gagal', 'raw' => $auth];
             }
 
-            // 4. Send Message
+            // 4. Send Message Prompt
             $requestId = uniqid();
             $fullMessageString = $userMessage;
             if (!empty($systemPrompt)) {
@@ -378,7 +388,6 @@ class ChatController
 
             // 5. Streaming Loop Response Handler (Anti Gantung)
             $aiTextResponse = "";
-
             while (true) {
                 $msg = $client->receive();
                 if (!$msg) break;
@@ -386,7 +395,6 @@ class ChatController
                 file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
                 $decoded = json_decode($msg, true);
 
-                // Langsung skip jika frame hanya berupa tick/health keep-alive
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
                     continue;
                 }
@@ -403,7 +411,6 @@ class ChatController
                             $aiTextResponse .= $chunkText;
                         }
 
-                        // Jika keluar status final, segera amankan text dan paksa keluar loop
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             if (isset($decoded['payload']['message']['content'][0]['text'])) {
                                 $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
@@ -432,14 +439,12 @@ class ChatController
 
             if (!empty($aiTextResponse)) {
                 return [
-                    'choices' => [
-                        [
-                            'message' => [
-                                'role'    => 'assistant',
-                                'content' => trim($aiTextResponse)
-                            ]
+                    'choices' => [[
+                        'message' => [
+                            'role'    => 'assistant',
+                            'content' => trim($aiTextResponse)
                         ]
-                    ]
+                    ]]
                 ];
             }
 
