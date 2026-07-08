@@ -340,14 +340,15 @@ class ChatController
                     "minProtocol" => 3,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "cli", // 💡 Tetap pakai "cli" agar lolos validasi 'allowed values'
+                        "id"       => "cli",
                         "version"  => "1.0.0",
                         "platform" => "linux",
                         "mode"     => "backend"
                     ],
-                    // 💡 DISINI TEMPATNYA: Identitas device ditaruh di objek params.device bawaan OpenClaw
+                    // ✅ SEKARANG SUDAH LENGKAP: ID dan PublicKey dimasukkan berbarengan
                     "device" => [
-                        "id" => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b"
+                        "id"        => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
+                        "publicKey" => "AFwoB9LySrRjA7xK5YrXRvjfi0rzvzXU4jSyb9XzayQ"
                     ],
                     "role"         => "operator",
                     "scopes"       => ["operator.admin", "operator.read", "operator.write"],
