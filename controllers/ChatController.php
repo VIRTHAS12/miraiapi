@@ -334,7 +334,7 @@ class ChatController
                         "mode"     => "backend"
                     ],
                     "role"   => "operator",
-                    "scopes" => ["operator.read"], // Amankan jabat tangan awal
+                    "scopes" => ["operator.read"], ["operator.admin"], // Amankan jabat tangan awal
                     "auth"   => [
                         "password" => $password
                     ]
@@ -358,7 +358,7 @@ class ChatController
                 "id"     => uniqid(),
                 "method" => "scope.upgrade",
                 "params" => [
-                    "scopes" => ["operator.read", "operator.admin", "operator.write"] // Naikkan level ke write memakai token master
+                    "scopes" => ["operator.read", "operator.write"] // Naikkan level ke write memakai token master
                 ]
             ];
             $client->text(json_encode($upgradePayload));
