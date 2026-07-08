@@ -346,27 +346,26 @@ class ChatController
                     "minProtocol" => 4,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "cli",       // ✅ Lolos enum allowed values
+                        "id"       => "cli",
                         "version"  => "1.0.0",
                         "platform" => "linux",
-                        "mode"     => "operator"   // ✅ Lolos enum allowed values
+                        "mode"     => "cli"        // ✅ FIX: Harus 'cli' sesuai enum validator schema!
                     ],
                     "device" => [
                         "id"        => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
                         "publicKey" => "AFwoB9LySrRjA7xK5YrXRvjfi0rzvzXU4jSyb9XzayQ",
-                        "signature" => $signature,  // ✅ Properti wajib terpenuhi secara legal
+                        "signature" => $signature,
                         "signedAt"  => (int)$ts,
                         "nonce"     => (string)$nonce
                     ],
-                    "role"   => "operator",
+                    "role"   => "operator", // (Kalau di sini baru bener nilainya 'operator')
                     "scopes" => ["operator.admin", "operator.read", "operator.write"],
                     "auth"   => [
-                        "password" => $password, // Syarat wajib gerbang luar Funnel mode
-                        "token"    => $deviceToken // Pembawa klaim hak akses internal
+                        "password" => $password,
+                        "token"    => $deviceToken
                     ]
                 ]
             ];
-
             $client->text(json_encode($connectPayload));
 
             // 4. Ambal Sesi Validasi Auth
@@ -464,19 +463,18 @@ class ChatController
     {
         $deviceId = "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b";
         $clientId = "cli";
-        $platform = "linux";
+        $clientMode = "cli"; // Singkronkan dengan connect payload
 
-        // 🔑 Spesifikasi Canonical V3: deviceId:clientId:nonce:timestamp:platform
+        // Urutan V3 signature builder: deviceId:clientId:nonce:timestamp:clientMode
         $messageToSign = sprintf(
             "%s:%s:%s:%d:%s",
             $deviceId,
             $clientId,
             $nonce,
             (int)$ts,
-            $platform
+            $clientMode
         );
 
-        // Hitung HMAC-SHA256 dengan Key = Device Token penguasa lu
         return hash_hmac('sha256', $messageToSign, $deviceToken);
     }
 }
