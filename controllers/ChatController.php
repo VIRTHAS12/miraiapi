@@ -358,7 +358,7 @@ class ChatController
                 "id"     => uniqid(),
                 "method" => "scope.upgrade",
                 "params" => [
-                    "scopes" => ["operator.read", "operator.write"] // Naikkan level ke write memakai token master
+                    "scopes" => ["operator.read", "operator.admin", "operator.write"] // Naikkan level ke write memakai token master
                 ]
             ];
             $client->text(json_encode($upgradePayload));
