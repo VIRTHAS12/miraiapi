@@ -327,10 +327,11 @@ class ChatController
             ]);
 
             // 1. Handshake (Akan otomatis lolos tanpa memicu challenge jika header valid)
+
             $handshake = $client->receive();
             file_put_contents('debug_openclaw.log', "HANDSHAKE RECEIVED:\n$handshake\n\n", FILE_APPEND);
 
-            // 2. Connect payload
+            // 2. Connect payload (Sederhana: Langsung lempar Device ID dan Token Mentah)
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -346,12 +347,16 @@ class ChatController
                     ],
                     "role"         => "operator",
                     "scopes"       => ["operator.admin", "operator.read", "operator.write"],
-                    // 💡 DIKOSONGKAN: Karena otentikasi sudah ditangani oleh HTTP Header di atas
-                    "auth"         => (object)[]
+                    "auth"         => [
+                        // ✅ LANGSUNG MASUKKAN DEVICE ID & TOKEN MENTAH SESUAI PENDAPAT LU
+                        "deviceId" => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
+                        "token"    => "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE"
+                    ]
                 ]
             ];
 
             $client->text(json_encode($connectPayload));
+
 
             // 3. Ambil Response Auth
             $auth = $client->receive();
