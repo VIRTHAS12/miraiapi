@@ -329,7 +329,8 @@ class ChatController
                     "minProtocol" => 3,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "gateway-client",
+                        // 💡 PENTING: Masukkan deviceId Anda agar tidak terbaca 'device=no'
+                        "id"       => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
                         "version"  => "1.0.0",
                         "platform" => "linux",
                         "mode"     => "backend"
@@ -337,11 +338,11 @@ class ChatController
                     "role"         => "operator",
                     "scopes"       => ["operator.admin", "operator.read", "operator.write"],
                     "auth"         => [
-                        "token" => $token
+                        // 💡 PERBAIKAN: Ubah menjadi 'password' untuk mengatasi 'password_missing'
+                        "password" => $token
                     ]
                 ]
             ];
-
             $client->text(json_encode($connectPayload));
 
             // 3. Auth
