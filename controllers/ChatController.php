@@ -332,6 +332,14 @@ class ChatController
             file_put_contents('debug_openclaw.log', "HANDSHAKE RECEIVED:\n$handshake\n\n", FILE_APPEND);
 
             // 2. Connect payload (Sederhana: Langsung lempar Device ID dan Token Mentah)
+            $handshakeDecoded = json_decode($handshake, true);
+            $nonce = $handshakeDecoded['payload']['nonce'] ?? '';
+            $ts = $handshakeDecoded['payload']['ts'] ?? '';
+
+            // 💡 SATU BARIS PENYELAMAT: Otomatis bikin signature dari gabungan nonce + ts menggunakan token lu
+            $signature = hash_hmac('sha256', $nonce . $ts, "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE");
+
+            // 2. Connect payload (Lengkap: id, publicKey, dan signature yang diminta skema)
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -345,10 +353,10 @@ class ChatController
                         "platform" => "linux",
                         "mode"     => "backend"
                     ],
-                    // ✅ SEKARANG SUDAH LENGKAP: ID dan PublicKey dimasukkan berbarengan
                     "device" => [
                         "id"        => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
-                        "publicKey" => "AFwoB9LySrRjA7xK5YrXRvjfi0rzvzXU4jSyb9XzayQ"
+                        "publicKey" => "AFwoB9LySrRjA7xK5YrXRvjfi0rzvzXU4jSyb9XzayQ",
+                        "signature" => $signature // ✅ Memenuhi syarat 'must have required property signature'
                     ],
                     "role"         => "operator",
                     "scopes"       => ["operator.admin", "operator.read", "operator.write"],
