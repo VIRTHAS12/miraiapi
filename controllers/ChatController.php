@@ -332,22 +332,22 @@ class ChatController
                 "id"     => uniqid(),
                 "method" => "connect",
                 "params" => [
-                    "minProtocol" => 4,
+                    "minProtocol" => 3,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "gateway-client",
+                        "id"       => "web",        // ✅ Gunakan 'web' agar diizinkan membawa device identity biasa
                         "version"  => "1.0.0",
                         "platform" => "linux",
-                        "mode"     => "backend"
+                        "mode"     => "operator"
                     ],
-                    // Tetap kosongkan device agar bebas dari jeratan signature validator
+                    "device" => [
+                        "id"        => "php-backend-device", // Samakan dengan key yang ada di devices.json lu
+                        "publicKey" => "N/A"                 // Wajib ada untuk memenuhi syarat schema
+                    ],
                     "role"   => "operator",
                     "scopes" => ["operator.admin", "operator.read", "operator.write"],
                     "auth"   => [
-                        // 1. Loloskan filter luar Funnel (Gunakan password gateway lu)
                         "password" => $_ENV['OPENCLAW_GATEWAY_PASSWORD'],
-
-                        // 2. Loloskan hak akses internal (Gunakan token yang punya akses write di devices.json)
                         "token"    => "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE"
                     ]
                 ]
