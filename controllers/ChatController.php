@@ -335,24 +335,22 @@ class ChatController
                     "minProtocol" => 4,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "php-backend",
+                        "id"       => "cli",       // ✅ FIX: Harus masuk enum allowed values ('cli')
                         "version"  => "1.0.0",
                         "platform" => "linux",
-                        "mode"     => "operator"
+                        "mode"     => "operator"   // ✅ FIX: Harus masuk enum allowed values ('operator')
                     ],
                     "device" => [
-                        // ID tepercaya yang sudah lu daftarkan/suntik manual di devices.json lokal
-                        "id" => "php-backend-device"
+                        "id"        => "php-backend-device", // Sesuai yang lu set di devices.json
+                        "publicKey" => "N/A"                 // ✅ FIX: Wajib ada biar gak didepak Schema Validator
                     ],
                     "role"   => "operator",
                     "scopes" => ["operator.admin", "operator.read", "operator.write"],
                     "auth"   => [
-                        // Sesuai dokumen: Pasang password auth di sini!
                         "password" => $password
                     ]
                 ]
             ];
-
             $client->text(json_encode($connectPayload));
 
             // 3. Ambil Response Auth
