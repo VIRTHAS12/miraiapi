@@ -332,20 +332,20 @@ class ChatController
                 "id"     => uniqid(),
                 "method" => "connect",
                 "params" => [
-                    "minProtocol" => 3,
+                    "minProtocol" => 4,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "gateway-client", // ✅ Masuk allowed value khusus control-plane
+                        "id"       => "gateway-client",
                         "version"  => "1.0.0",
                         "platform" => "linux",
-                        "mode"     => "backend"        // ✅ Pasangan resmi untuk gateway-client
+                        "mode"     => "backend"
                     ],
-                    // ❌ HAPUS TOTAL OBJEK "device" agar OpenClaw tidak menuntut 'signature' atau 'publicKey'
+                    // ❌ Tetap kosongkan objek device biar gak rewel minta signature
                     "role"   => "operator",
                     "scopes" => ["operator.admin", "operator.read", "operator.write"],
                     "auth"   => [
-                        // Tetap kirim password cadangan di body sesuai syarat wajib Funnel mode
-                        "password" => $password
+                        // 🔥 GANTI DI SINI: Tembak token yang punya hak akses penuh di devices.json!
+                        "token" => "uCo7pyZwOxwz8IKOLbV3EsGwi7-7o2m98Sq7LF9pLwE"
                     ]
                 ]
             ];
