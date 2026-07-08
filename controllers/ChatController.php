@@ -308,19 +308,30 @@ class ChatController
     }
 
     // 🔧 HELPER CALL OPENCLAW
+
     private function callOpenClaw($systemPrompt, $userMessage)
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
         $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
 
         try {
-            $client = new \WebSocket\Client($apiUrl, ['timeout' => 60]);
+            // Tambahkan opsi fragment dan timeout yang pas untuk remote proxy
+            $client = new \WebSocket\Client($apiUrl, [
+                'timeout' => 45,
+                'fragment_size' => 4096
+            ]);
 
-            // 1. Handshake
-            $handshake = $client->receive();
-            file_put_contents('debug_openclaw.log', "HANDSHAKE:\n$handshake\n\n", FILE_APPEND);
+            // 1. Handshake Awal (Dibuat Non-Blocking / Opsional)
+            // Beberapa versi gateway lewat Funnel langsung siap menerima data tanpa welcome frame
+            try {
+                $handshake = $client->receive();
+                file_put_contents('debug_openclaw.log', "HANDSHAKE RECEIVED:\n$handshake\n\n", FILE_APPEND);
+            } catch (\Throwable $e) {
+                // Jika gantung di awal, abaikan dan lanjut kirim payload connect
+                file_put_contents('debug_openclaw.log', "HANDSHAKE BYPASS / TIMEOUT\n", FILE_APPEND);
+            }
 
-            // 2. Connect payload
+            // 2. Connect payload (Sudah memakai Device ID & Key Password)
             $connectPayload = [
                 "type"   => "req",
                 "id"     => uniqid(),
@@ -329,7 +340,6 @@ class ChatController
                     "minProtocol" => 3,
                     "maxProtocol" => 4,
                     "client"      => [
-                        // 💡 PENTING: Masukkan deviceId Anda agar tidak terbaca 'device=no'
                         "id"       => "7cda61e7af0b0acd693789264a10b86988ecc33f08de784594f56dd4b6c7143b",
                         "version"  => "1.0.0",
                         "platform" => "linux",
@@ -338,16 +348,16 @@ class ChatController
                     "role"         => "operator",
                     "scopes"       => ["operator.admin", "operator.read", "operator.write"],
                     "auth"         => [
-                        // 💡 PERBAIKAN: Ubah menjadi 'password' untuk mengatasi 'password_missing'
                         "password" => $token
                     ]
                 ]
             ];
+
             $client->text(json_encode($connectPayload));
 
-            // 3. Auth
+            // 3. Ambil Response Auth
             $auth = $client->receive();
-            file_put_contents('debug_openclaw.log', "AUTH:\n$auth\n\n", FILE_APPEND);
+            file_put_contents('debug_openclaw.log', "AUTH RESPONSE:\n$auth\n\n", FILE_APPEND);
             $authDecoded = json_decode($auth, true);
 
             if (!($authDecoded['ok'] ?? false)) {
@@ -355,7 +365,7 @@ class ChatController
                 return ['error' => true, 'message' => 'Auth Client Gagal', 'raw' => $auth];
             }
 
-            // 4. Send Message
+            // 4. Send Message Prompt
             $requestId = uniqid();
             $fullMessageString = $userMessage;
             if (!empty($systemPrompt)) {
@@ -376,7 +386,7 @@ class ChatController
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
             file_put_contents('debug_openclaw.log', "PROMPT SENT\n", FILE_APPEND);
 
-            // 5. Streaming Loop Response Handler (Anti Gantung)
+            // 5. Streaming Loop Response Handler
             $aiTextResponse = "";
 
             while (true) {
@@ -386,7 +396,6 @@ class ChatController
                 file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
                 $decoded = json_decode($msg, true);
 
-                // Langsung skip jika frame hanya berupa tick/health keep-alive
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
                     continue;
                 }
@@ -403,7 +412,6 @@ class ChatController
                             $aiTextResponse .= $chunkText;
                         }
 
-                        // Jika keluar status final, segera amankan text dan paksa keluar loop
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             if (isset($decoded['payload']['message']['content'][0]['text'])) {
                                 $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
