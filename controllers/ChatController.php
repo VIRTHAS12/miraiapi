@@ -310,91 +310,140 @@ class ChatController
     private function callOpenClaw($systemPrompt, $userMessage)
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
-        $apiUrl = str_replace(['wss://', 'ws://'], ['https://', 'http://'], $apiUrl);
-
-        // 🔥 UBAH DI SINI: Singkirkan /v1/ dan langsung tembak /chat/send
-        $endpoint = rtrim($apiUrl, '/') . '/chat/send';
-
-        $token = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
-
-        $fullMessageString = $userMessage;
-        if (!empty($systemPrompt)) {
-            $fullMessageString = "[System Instruction: " . $systemPrompt . "]\nUser Message: " . $userMessage;
-        }
-
-        $payload = [
-            "sessionKey"     => "agent:main:main",
-            "idempotencyKey" => uniqid('idemp_', true),
-            "message"        => (string)$fullMessageString
-        ];
+        $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
 
         try {
-            $ch = curl_init($endpoint);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-            curl_setopt($ch, CURLOPT_TIMEOUT, 45);
+            $client = new \WebSocket\Client($apiUrl, ['timeout' => 60]);
 
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+            // 1. Handshake
+            $handshake = $client->receive();
+            file_put_contents('debug_openclaw.log', "HANDSHAKE:\n$handshake\n\n", FILE_APPEND);
 
-            curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $token,
-                'X-API-KEY: ' . $token
-            ]);
+            // 2. Connect payload
+            $connectPayload = [
+                "type"   => "req",
+                "id"     => uniqid(),
+                "method" => "connect",
+                "params" => [
+                    "minProtocol" => 4,
+                    "maxProtocol" => 4,
+                    "client"      => [
+                        "id"       => "gateway-client",
+                        "version"  => "1.0.0",
+                        "platform" => "linux",
+                        "mode"     => "backend"
+                    ],
+                    "role"   => "operator",
+                    "scopes" => ["operator.admin", "operator.read", "operator.write"],
+                    "auth"   => [
+                        // 🔥 Gunakan string password yang sama dengan di laptop lu!
+                        "password" => "kurokaze"
+                    ]
+                ]
+            ];
+            $client->text(json_encode($connectPayload));
 
-            $responseStr = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
+            // 3. Auth
+            $auth = $client->receive();
+            file_put_contents('debug_openclaw.log', "AUTH:\n$auth\n\n", FILE_APPEND);
+            $authDecoded = json_decode($auth, true);
 
-            file_put_contents('debug_openclaw_http.log', "HTTP CODE: $httpCode | RESPONSE: $responseStr\n\n", FILE_APPEND);
-
-            // 💡 JIKA MASIH 404, KITA COBA FALLBACK AUTOMATIS KE /api/v1/chat/send
-            if ($httpCode === 404) {
-                $fallbackEndpoint = rtrim($apiUrl, '/') . '/api/v1/chat/send';
-                $ch = curl_init($fallbackEndpoint);
-                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                curl_setopt($ch, CURLOPT_POST, true);
-                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-                curl_setopt($ch, CURLOPT_TIMEOUT, 45);
-                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-                curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                    'Content-Type: application/json',
-                    'Authorization: Bearer ' . $token,
-                    'X-API-KEY: ' . $token
-                ]);
-                $responseStr = curl_exec($ch);
-                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_close($ch);
+            if (!($authDecoded['ok'] ?? false)) {
+                $client->close();
+                return ['error' => true, 'message' => 'Auth Client Gagal', 'raw' => $auth];
             }
 
-            if ($httpCode !== 200) {
-                return ['error' => true, 'message' => "Gateway HTTP Error ($httpCode): $responseStr"];
+            // 4. Send Message
+            $requestId = uniqid();
+            $fullMessageString = $userMessage;
+            if (!empty($systemPrompt)) {
+                $fullMessageString = "[System Instruction: " . $systemPrompt . "]\nUser Message: " . $userMessage;
             }
 
-            $decoded = json_decode($responseStr, true);
+            $chatPayload = [
+                "type"   => "req",
+                "id"     => $requestId,
+                "method" => "chat.send",
+                "params" => [
+                    "sessionKey"     => "agent:main:main",
+                    "idempotencyKey" => uniqid('idemp_', true),
+                    "message"        => (string) $fullMessageString
+                ]
+            ];
 
-            $aiTextResponse = $decoded['payload']['message']['content'][0]['text']
-                ?? $decoded['message']['content']
-                ?? $decoded['text']
-                ?? '';
+            $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
+            file_put_contents('debug_openclaw.log', "PROMPT SENT\n", FILE_APPEND);
+
+            // 5. Streaming Loop Response Handler (Anti Gantung)
+            $aiTextResponse = "";
+
+            while (true) {
+                $msg = $client->receive();
+                if (!$msg) break;
+
+                file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
+                $decoded = json_decode($msg, true);
+
+                // Langsung skip jika frame hanya berupa tick/health keep-alive
+                if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
+                    continue;
+                }
+
+                if (isset($decoded['type']) && $decoded['type'] === 'event') {
+                    if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
+
+                        $chunkText = $decoded['payload']['deltaText']
+                            ?? $decoded['payload']['data']['text']
+                            ?? $decoded['payload']['data']['delta']
+                            ?? '';
+
+                        if (!empty($chunkText)) {
+                            $aiTextResponse .= $chunkText;
+                        }
+
+                        // Jika keluar status final, segera amankan text dan paksa keluar loop
+                        if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
+                            if (isset($decoded['payload']['message']['content'][0]['text'])) {
+                                $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
+                            }
+                            break;
+                        }
+
+                        if (isset($decoded['payload']['done']) && $decoded['payload']['done'] === true) {
+                            break;
+                        }
+                    }
+                }
+
+                if (isset($decoded['id']) && $decoded['id'] === $requestId) {
+                    if (isset($decoded['payload']['message']['content'][0]['text'])) {
+                        $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
+                        break;
+                    }
+                    if ($decoded['ok'] ?? false) {
+                        if (!empty($aiTextResponse)) break;
+                    }
+                }
+            }
+
+            $client->close();
 
             if (!empty($aiTextResponse)) {
                 return [
-                    'choices' => [[
-                        'message' => [
-                            'role'    => 'assistant',
-                            'content' => trim($aiTextResponse)
+                    'choices' => [
+                        [
+                            'message' => [
+                                'role'    => 'assistant',
+                                'content' => trim($aiTextResponse)
+                            ]
                         ]
-                    ]]
+                    ]
                 ];
             }
 
-            return ['error' => true, 'message' => 'REST API tidak mengembalikan output teks.', 'raw' => $responseStr];
+            return ['error' => true, 'message' => 'Sesi chat selesai tanpa mengembalikan output teks.'];
         } catch (\Throwable $e) {
-            return ['error' => true, 'message' => 'HTTP Exception: ' . $e->getMessage()];
+            return ['error' => true, 'message' => $e->getMessage()];
         }
     }
 }
