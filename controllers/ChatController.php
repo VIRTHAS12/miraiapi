@@ -313,7 +313,19 @@ class ChatController
         $token  = trim($_ENV['OPENCLAW_GATEWAY_TOKEN']);
 
         try {
-            $client = new \WebSocket\Client($apiUrl, ['timeout' => 60]);
+            $client = new \WebSocket\Client($apiUrl, [
+                'timeout' => 60,
+                'headers' => [
+                    'Origin' => 'http://127.0.0.1:18789'
+                ],
+                'context' => stream_context_create([
+                    'ssl' => [
+                        'verify_peer'       => false,
+                        'verify_peer_name'  => false,
+                        'allow_self_signed' => true
+                    ]
+                ])
+            ]);
 
             // 1. Handshake
             $handshake = $client->receive();
