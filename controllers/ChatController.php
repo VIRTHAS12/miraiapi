@@ -328,15 +328,16 @@ class ChatController
                     "minProtocol" => 4,
                     "maxProtocol" => 4,
                     "client"      => [
-                        "id"       => "gateway-client",
-                        "version"  => "1.0.0",
-                        "platform" => "linux",
-                        "mode"     => "backend"
+                        // 🔥 MENYAMAR JADI CONTROL UI RESMI!
+                        "id"       => "openclaw-control-ui",
+                        "version"  => "control-ui",
+                        "platform" => "Linux x86_64",
+                        "mode"     => "webchat"
                     ],
                     "role"   => "operator",
-                    "scopes" => ["operator.admin", "operator.read", "operator.write"],
+                    "scopes" => ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
                     "auth"   => [
-                        // 🔥 Gunakan string password yang sama dengan di laptop lu!
+                        // Tetap bawa password Funnel lu yang valid
                         "password" => "kurokaze"
                     ]
                 ]
