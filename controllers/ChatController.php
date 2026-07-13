@@ -388,69 +388,75 @@ class ChatController
             // 5. Streaming Loop Response Handler (Anti Gantung - FIXED)
             $aiTextResponse = "";
 
-            while (true) {
-                $msg = $client->receive();
-                if (!$msg) break;
+while (true) {
+    $msg = $client->receive();
+    if (!$msg) break;
 
-                file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
-                $decoded = json_decode($msg, true);
+    file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
+    $decoded = json_decode($msg, true);
 
-                // Langsung skip jika frame hanya berupa tick/health keep-alive
-                if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
-                    continue;
-                }
+    // Langsung skip jika frame hanya berupa tick/health keep-alive
+    if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) {
+        continue;
+    }
 
-                if (isset($decoded['type']) && $decoded['type'] === 'event') {
-                    if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
+    if (isset($decoded['type']) && $decoded['type'] === 'event') {
+        if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
 
-                        // Amankan jika ada text delta yang masuk
-                        $chunkText = $decoded['payload']['deltaText']
-                            ?? $decoded['payload']['data']['text']
-                            ?? $decoded['payload']['data']['delta']
-                            ?? '';
+            // 1. Amankan Text Delta (Secara akumulatif)
+            $chunkText = $decoded['payload']['deltaText']
+                ?? $decoded['payload']['data']['text']
+                ?? $decoded['payload']['data']['delta']
+                ?? '';
 
-                        if (!empty($chunkText)) {
-                            $aiTextResponse .= $chunkText;
-                        }
-
-                        // 🔥 FIX 1: Deteksi State Error dari OpenClaw Gateway (Misal LLM Down / Timeout)
-                        if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'error') {
-                            $client->close();
-                            $errMsg = $decoded['payload']['errorMessage'] ?? 'LLM Agent Error Encountered';
-                            return ['error' => true, 'message' => $errMsg, 'raw' => $msg];
-                        }
-
-                        // Jika keluar status final, segera amankan text dan paksa keluar loop
-                        if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
-                            if (isset($decoded['payload']['message']['content'][0]['text'])) {
-                                $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
-                            }
-                            break;
-                        }
-
-                        if (isset($decoded['payload']['done']) && $decoded['payload']['done'] === true) {
-                            break;
-                        }
-                    }
-                }
-
-                if (isset($decoded['id']) && $decoded['id'] === $requestId) {
-                    // 🔥 FIX 2: Jika request return status tidak ok (Error di level method call)
-                    if (isset($decoded['ok']) && $decoded['ok'] === false) {
-                        $client->close();
-                        return ['error' => true, 'message' => $decoded['errorMessage'] ?? 'Request chat.send rejected', 'raw' => $msg];
-                    }
-
-                    if (isset($decoded['payload']['message']['content'][0]['text'])) {
-                        $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
-                        break;
-                    }
-                    if ($decoded['ok'] ?? false) {
-                        if (!empty($aiTextResponse)) break;
-                    }
-                }
+            if (!empty($chunkText)) {
+                $aiTextResponse .= $chunkText;
             }
 
+            // 2. Interseptor jika terdeteksi error dari LLM Gateway
+            if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'error') {
+                $client->close();
+                $errMsg = $decoded['payload']['errorMessage'] ?? 'LLM Agent Error Encountered';
+                return ['error' => true, 'message' => $errMsg, 'raw' => $msg];
+            }
+
+            // 3. Jika keluar status final, backup teks seaman mungkin lalu break
+            if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
+                // Coba ambil text final, kalau strukturnya meleset, pakai akumulasi deltaText ($aiTextResponse) yang sudah terkumpul
+                $finalText = $decoded['payload']['message']['content'][0]['text'] 
+                    ?? $decoded['payload']['message']['content'][0] 
+                    ?? '';
+                
+                if (!empty($finalText) && is_string($finalText)) {
+                    $aiTextResponse = $finalText;
+                }
+                break;
+            }
+
+            if (isset($decoded['payload']['done']) && $decoded['payload']['done'] === true) {
+                break;
+            }
+        }
+    }
+
+    // Fallback handler untuk request base matching ID
+    if (isset($decoded['id']) && $decoded['id'] === $requestId) {
+        if (isset($decoded['ok']) && $decoded['ok'] === false) {
+            $client->close();
+            return ['error' => true, 'message' => $decoded['errorMessage'] ?? 'Request chat.send rejected', 'raw' => $msg];
+        }
+
+        $finalText = $decoded['payload']['message']['content'][0]['text'] ?? '';
+        if (!empty($finalText)) {
+            $aiTextResponse = $finalText;
+            break;
+        }
+        
+        if (($decoded['ok'] ?? false) && !empty($aiTextResponse)) {
+            break;
+        }
+    }
+}
             $client->close();
 
             if (!empty($aiTextResponse)) {
