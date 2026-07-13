@@ -197,7 +197,7 @@ class CalendarController
 
         $formattedEvents = [];
         // Gunakan kombinasi ID + Jam sebagai penanda unik agar tidak terjadi overwriting di memori loop
-        $processedComboKeys = []; 
+        $processedComboKeys = [];
 
         // 🚀 STEP 2: Looping setiap kalender (Primary, Python, Roblox, dll.)
         foreach ($calendars as $cal) {
@@ -216,7 +216,7 @@ class CalendarController
             $items = $resultEvents['items'] ?? [];
 
             if (!isset($resultEvents['items'])) {
-                continue; 
+                continue;
             }
 
             // 🚀 STEP 3: Looping & Sinkronisasi event
@@ -274,13 +274,13 @@ class CalendarController
                     $formattedEvents[] = [
                         'id' => $item['id'],
                         'title' => $item['summary'] ?? '(Tanpa Judul)',
-                        'start_time' => $startTimeFormatted, 
+                        'start_time' => $startTimeFormatted,
                         'end_time' => $endTimeFormatted
                     ];
                 }
             }
         }
-        
+
         return response('success', 'Sinkronisasi selesai brok!', $formattedEvents);
     }
     public function deleteEvent($id)
@@ -314,7 +314,7 @@ class CalendarController
         return response('success', 'Event berhasil dihapus');
     }
 
-        public function updateEvent($id, $dataManual = null)
+    public function updateEvent($id, $dataManual = null)
     {
         $user = \Core\Middleware::Userget();
         $input = $dataManual ?? jsonInput();
