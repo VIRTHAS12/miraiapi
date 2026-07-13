@@ -182,9 +182,9 @@ class ChatController
             // Eksekusi update via CalendarController
             $googleResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
-            // 🔥 DETEKSI CLASH SAAT UPDATE
-            // Karena updateEvent() mengembalikan format response() standar, kita cek HTTP status atau isi bodynya
-            $responseData = json_decode($googleResponse->getBody(), true);
+            // 🔥 PERBAIKAN FATAL ERROR: Tangani tipe response dari calendar controller dengan benar (tanpa getBody)
+            $responseData = is_array($googleResponse) ? $googleResponse : json_decode((string) $googleResponse, true);
+
             if (isset($responseData['status']) && $responseData['status'] === 'error') {
                 $clashMessage = $responseData['message'] ?? "Gagal update jadwal karena bentrok, brok.";
                 $this->chatModel->saveMessage([
@@ -192,7 +192,7 @@ class ChatController
                     'role'    => 'assistant',
                     'content' => $clashMessage
                 ]);
-                return $googleResponse; // Teruskan response error 409 ke frontend
+                return response('error', $clashMessage, null, 409);
             }
 
             $timeStartStr = date('H:i', strtotime($parsed['start']));
@@ -256,6 +256,7 @@ class ChatController
             ]);
         }
     }
+
     // 📜 METHOD LOGIC HISTORY
     public function history()
     {
@@ -403,18 +404,22 @@ class ChatController
                 }
 
                 if (isset($decoded['type']) && $decoded['type'] === 'event') {
-                    if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
+                    // 🔥 PERBAIKAN PERCEPATAN: Hanya ambil dari 'chat' agar teks gak double
+                    if ($decoded['event'] === 'chat') {
 
-                        $chunkText = $decoded['payload']['deltaText']
-                            ?? $decoded['payload']['data']['text']
-                            ?? $decoded['payload']['data']['delta']
-                            ?? '';
+                        $chunkText = $decoded['payload']['deltaText'] ?? '';
 
                         if (!empty($chunkText)) {
                             $aiTextResponse .= $chunkText;
+
+                            // 🚀 BREAK EARLY: Cek apakah string respons sudah mengandung format JSON utuh
+                            // Jika ya, gak usah nungguin AI selesai ngetik sampai "final", langsung hajar!
+                            if (preg_match('/\{[\s\S]*\}/', $aiTextResponse)) {
+                                break;
+                            }
                         }
 
-                        // Jika keluar status final, segera amankan text dan paksa keluar loop
+                        // Tetap kita sisakan fallback ke "final" jaga-jaga kalau string-nya gantung
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             if (isset($decoded['payload']['message']['content'][0]['text'])) {
                                 $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
