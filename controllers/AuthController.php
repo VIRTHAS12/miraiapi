@@ -9,6 +9,7 @@ use Core\JWT;
 use Google\Client as GoogleClient;
 // ✅ Biarkan murni tanpa alias, atau hapus baris ini kalau di bawah pakai full backslash
 use Google\Service\Oauth2;
+
 class AuthController
 {
     private $userModel;
@@ -32,14 +33,15 @@ class AuthController
         $client->addScope("email");
         $client->addScope("profile");
         $client->addScope("https://www.googleapis.com/auth/calendar");
+        // 🔥 FIX: Tambahkan scope ini agar Google mengizinkan penarikan data dari Kalender Institusi/Shared!
+        $client->addScope("https://www.googleapis.com/auth/calendar.readonly");
 
         // Wajib set offline agar Google selalu mengirimkan refresh_token di login pertama
         $client->setAccessType('offline');
-        $client->setApprovalPrompt('force'); // Memaksa muncul consent screen agar refresh_token selalu didapat
+        $client->setApprovalPrompt('force');
 
         return $client;
     }
-
     // 🔐 STEP 1: Redirect ke Google OAuth menggunakan Library Resmi
     public function loginWithGoogle()
     {

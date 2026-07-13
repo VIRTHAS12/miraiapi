@@ -165,110 +165,110 @@ class CalendarController
 
     // 📖 GET EVENTS
     public function getEvents()
-{
-    $user = \Core\Middleware::Userget();
-    $accessToken = $this->getValidAccessToken($user);
+    {
+        $user = \Core\Middleware::Userget();
+        $accessToken = $this->getValidAccessToken($user);
 
-    // 🚀 STEP 1: Ambil semua daftar kalender (List) yang diakses oleh user
-    $chList = curl_init("https://www.googleapis.com/calendar/v3/users/me/calendarList");
-    curl_setopt_array($chList, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => [
-            "Authorization: Bearer $accessToken"
-        ]
-    ]);
-    
-    $listResponse = curl_exec($chList);
-    curl_close($chList);
-
-    $listResult = json_decode($listResponse, true);
-    $calendars = $listResult['items'] ?? [];
-
-    if (empty($calendars)) {
-        return response('error', 'Gagal atau tidak ada kalender terdeteksi', null, 500);
-    }
-
-    $formattedEvents = [];
-
-    // 🚀 STEP 2: Looping setiap kalender yang lu punya (Primary, Python, Roblox, dll.)
-    foreach ($calendars as $cal) {
-        $calendarId = $cal['id']; // Mengambil ID dinamis, misal: c_classroom...
-        
-        // Tembak API events untuk ID kalender saat ini
-        $urlEvents = "https://www.googleapis.com/calendar/v3/calendars/" . urlencode($calendarId) . "/events";
-        $chEvents = curl_init($urlEvents);
-        
-        curl_setopt_array($chEvents, [
+        // 🚀 STEP 1: Ambil semua daftar kalender (List) yang diakses oleh user
+        $chList = curl_init("https://www.googleapis.com/calendar/v3/users/me/calendarList");
+        curl_setopt_array($chList, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => [
                 "Authorization: Bearer $accessToken"
             ]
         ]);
 
-        $responseEvents = curl_exec($chEvents);
-        curl_close($chEvents);
+        $listResponse = curl_exec($chList);
+        curl_close($chList);
 
-        $resultEvents = json_decode($responseEvents, true);
-        $items = $resultEvents['items'] ?? [];
+        $listResult = json_decode($listResponse, true);
+        $calendars = $listResult['items'] ?? [];
 
-        // 🚀 STEP 3: Looping & Sinkronisasi event dari kalender ini ke DB lokal
-        foreach ($items as $item) {
-            $start = $item['start']['dateTime'] ?? $item['start']['date'] ?? null;
-            $end = $item['end']['dateTime'] ?? $item['end']['date'] ?? null;
+        if (empty($calendars)) {
+            return response('error', 'Gagal atau tidak ada kalender terdeteksi', null, 500);
+        }
 
-            if ($start) {
-                $startTimeFormatted = date('Y-m-d H:i:s', strtotime($start));
-                $endTimeFormatted = $end ? date('Y-m-d H:i:s', strtotime($end)) : $startTimeFormatted;
-                $googleStatus = $item['status'] ?? 'confirmed';
+        $formattedEvents = [];
 
-                // Cari apakah event sudah tersimpan di lokal DB
-                $existingEvent = $this->eventModel->findByGoogleEventId($item['id']);
+        // 🚀 STEP 2: Looping setiap kalender yang lu punya (Primary, Python, Roblox, dll.)
+        foreach ($calendars as $cal) {
+            $calendarId = $cal['id']; // Mengambil ID dinamis, misal: c_classroom...
 
-                if ($googleStatus === 'cancelled') {
-                    if ($existingEvent && $existingEvent['status'] !== 'cancelled') {
-                        $this->eventModel->deleteEvent($existingEvent['id']);
+            // Tembak API events untuk ID kalender saat ini
+            $urlEvents = "https://www.googleapis.com/calendar/v3/calendars/" . urlencode($calendarId) . "/events";
+            $chEvents = curl_init($urlEvents);
+
+            curl_setopt_array($chEvents, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HTTPHEADER => [
+                    "Authorization: Bearer $accessToken"
+                ]
+            ]);
+
+            $responseEvents = curl_exec($chEvents);
+            curl_close($chEvents);
+
+            $resultEvents = json_decode($responseEvents, true);
+            $items = $resultEvents['items'] ?? [];
+
+            // 🚀 STEP 3: Looping & Sinkronisasi event dari kalender ini ke DB lokal
+            foreach ($items as $item) {
+                $start = $item['start']['dateTime'] ?? $item['start']['date'] ?? null;
+                $end = $item['end']['dateTime'] ?? $item['end']['date'] ?? null;
+
+                if ($start) {
+                    $startTimeFormatted = date('Y-m-d H:i:s', strtotime($start));
+                    $endTimeFormatted = $end ? date('Y-m-d H:i:s', strtotime($end)) : $startTimeFormatted;
+                    $googleStatus = $item['status'] ?? 'confirmed';
+
+                    // Cari apakah event sudah tersimpan di lokal DB
+                    $existingEvent = $this->eventModel->findByGoogleEventId($item['id']);
+
+                    if ($googleStatus === 'cancelled') {
+                        if ($existingEvent && $existingEvent['status'] !== 'cancelled') {
+                            $this->eventModel->deleteEvent($existingEvent['id']);
+                        }
+                        continue;
                     }
-                    continue;
-                }
 
-                if ($existingEvent) {
-                    if (
-                        $existingEvent['title'] !== ($item['summary'] ?? '(Tanpa Judul)') ||
-                        $existingEvent['start_time'] !== $startTimeFormatted ||
-                        $existingEvent['end_time'] !== $endTimeFormatted ||
-                        $existingEvent['status'] !== 'active'
-                    ) {
-                        $this->eventModel->updateEvent($existingEvent['id'], [
+                    if ($existingEvent) {
+                        if (
+                            $existingEvent['title'] !== ($item['summary'] ?? '(Tanpa Judul)') ||
+                            $existingEvent['start_time'] !== $startTimeFormatted ||
+                            $existingEvent['end_time'] !== $endTimeFormatted ||
+                            $existingEvent['status'] !== 'active'
+                        ) {
+                            $this->eventModel->updateEvent($existingEvent['id'], [
+                                'title' => $item['summary'] ?? '(Tanpa Judul)',
+                                'start_time' => $startTimeFormatted,
+                                'end_time' => $endTimeFormatted
+                            ]);
+                        }
+                    } else {
+                        $this->eventModel->createEvent([
+                            'user_id' => $user['id'],
+                            'google_event_id' => $item['id'],
                             'title' => $item['summary'] ?? '(Tanpa Judul)',
                             'start_time' => $startTimeFormatted,
-                            'end_time' => $endTimeFormatted
+                            'end_time' => $endTimeFormatted,
+                            'status' => 'active'
                         ]);
                     }
-                } else {
-                    $this->eventModel->createEvent([
-                        'user_id' => $user['id'],
-                        'google_event_id' => $item['id'],
+
+                    // Masukkan ke array penampung untuk dikirim ke Expo UI
+                    $formattedEvents[] = [
+                        'id' => $item['id'],
                         'title' => $item['summary'] ?? '(Tanpa Judul)',
                         'start_time' => $startTimeFormatted,
-                        'end_time' => $endTimeFormatted,
-                        'status' => 'active'
-                    ]);
+                        'end_time' => $endTimeFormatted
+                    ];
                 }
-
-                // Masukkan ke array penampung untuk dikirim ke Expo UI
-                $formattedEvents[] = [
-                    'id' => $item['id'],
-                    'title' => $item['summary'] ?? '(Tanpa Judul)',
-                    'start_time' => $startTimeFormatted,
-                    'end_time' => $endTimeFormatted
-                ];
             }
         }
-    }
 
-    // 🚀 STEP 4: Kembalikan semua gabungan event kalender ke frontend
-    return response('success', 'Semua list kalender berhasil disinkronkan', $formattedEvents);
-}    // ❌ DELETE EVENT
+        // 🚀 STEP 4: Kembalikan semua gabungan event kalender ke frontend
+        return response('success', 'Semua list kalender berhasil disinkronkan', $formattedEvents);
+    }    // ❌ DELETE EVENT
     public function deleteEvent($id)
     {
         $user = \Core\Middleware::Userget();
