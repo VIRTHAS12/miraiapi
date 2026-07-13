@@ -320,7 +320,7 @@ class ChatController
                 ],
                 'context' => stream_context_create([
                     'ssl' => [
-                        'verify_peer'       => false,
+                        'verify_peer'        => false,
                         'verify_peer_name'  => false,
                         'allow_self_signed' => true
                     ]
@@ -340,7 +340,6 @@ class ChatController
                     "minProtocol" => 4,
                     "maxProtocol" => 4,
                     "client"      => [
-                        // 🔥 MENYAMAR JADI CONTROL UI RESMI!
                         "id"       => "openclaw-control-ui",
                         "version"  => "control-ui",
                         "platform" => "Linux x86_64",
@@ -349,7 +348,6 @@ class ChatController
                     "role"   => "operator",
                     "scopes" => ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
                     "auth"   => [
-                        // Tetap bawa password Funnel lu yang valid
                         "password" => "kurokaze"
                     ]
                 ]
@@ -387,7 +385,7 @@ class ChatController
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
             file_put_contents('debug_openclaw.log', "PROMPT SENT\n", FILE_APPEND);
 
-            // 5. Streaming Loop Response Handler (Anti Gantung)
+            // 5. Streaming Loop Response Handler (Anti Gantung - FIXED)
             $aiTextResponse = "";
 
             while (true) {
@@ -405,6 +403,7 @@ class ChatController
                 if (isset($decoded['type']) && $decoded['type'] === 'event') {
                     if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
 
+                        // Amankan jika ada text delta yang masuk
                         $chunkText = $decoded['payload']['deltaText']
                             ?? $decoded['payload']['data']['text']
                             ?? $decoded['payload']['data']['delta']
@@ -412,6 +411,13 @@ class ChatController
 
                         if (!empty($chunkText)) {
                             $aiTextResponse .= $chunkText;
+                        }
+
+                        // 🔥 FIX 1: Deteksi State Error dari OpenClaw Gateway (Misal LLM Down / Timeout)
+                        if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'error') {
+                            $client->close();
+                            $errMsg = $decoded['payload']['errorMessage'] ?? 'LLM Agent Error Encountered';
+                            return ['error' => true, 'message' => $errMsg, 'raw' => $msg];
                         }
 
                         // Jika keluar status final, segera amankan text dan paksa keluar loop
@@ -429,6 +435,12 @@ class ChatController
                 }
 
                 if (isset($decoded['id']) && $decoded['id'] === $requestId) {
+                    // 🔥 FIX 2: Jika request return status tidak ok (Error di level method call)
+                    if (isset($decoded['ok']) && $decoded['ok'] === false) {
+                        $client->close();
+                        return ['error' => true, 'message' => $decoded['errorMessage'] ?? 'Request chat.send rejected', 'raw' => $msg];
+                    }
+
                     if (isset($decoded['payload']['message']['content'][0]['text'])) {
                         $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
                         break;
