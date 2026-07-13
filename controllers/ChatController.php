@@ -40,7 +40,6 @@ class ChatController
             $savedContent = "[Mengirim Lampiran Jadwal: " . ($attachedEvent['title'] ?? '') . "]";
         }
 
-        // 🔥 OPTIMASI 1: Amankan payload attachment user ke kolom konten secara terstruktur (JSON) jika ada
         $this->chatModel->saveMessage([
             'user_id' => $user['id'],
             'role'    => 'user',
@@ -97,9 +96,7 @@ class ChatController
         if (!$parsed || isset($parsed['status'])) {
             $fallbackMessage = !empty($rawAiOutput) ? $rawAiOutput : 'Tidak ada informasi jadwal terdeteksi dari kalimat lu, brok.';
             $this->chatModel->saveMessage([
-                'user_id' => $user['id'],
-                'role'    => 'assistant',
-                'content' => $fallbackMessage
+                'user_id' => $user['id'], 'role' => 'assistant', 'content' => $fallbackMessage
             ]);
             return response('success', 'Tidak ada event terdeteksi', ['ai_raw' => $fallbackMessage]);
         }
@@ -111,6 +108,10 @@ class ChatController
         }
 
         $db = new Database(require BASE_PATH . 'config.php');
+
+        // 🔥 NORMALISASI STRING ISO UNTUK PARSING AMAN PHP (Tukar 'T' menjadi spasi biasa)
+        $safeStartString = isset($parsed['start']) ? str_replace('T', ' ', $parsed['start']) : null;
+        $safeEndString = isset($parsed['end']) ? str_replace('T', ' ', $parsed['end']) : null;
 
         // 1. ❌ AKSI MENGHAPUS JADWAL (DELETE)
         if (isset($parsed['action']) && $parsed['action'] === 'delete') {
@@ -141,8 +142,8 @@ class ChatController
                 'action' => 'delete',
                 'event'  => [
                     'title' => $targetEvent['title'],
-                    'start' => date('c', strtotime($targetEvent['start_time'])),
-                    'end'   => date('c', strtotime($targetEvent['end_time']))
+                    'start' => date('Y-m-d H:i:s', strtotime($targetEvent['start_time'])),
+                    'end'   => date('Y-m-d H:i:s', strtotime($targetEvent['end_time']))
                 ]
             ]);
 
@@ -156,11 +157,11 @@ class ChatController
                 $targetEvent = $db->query("SELECT * FROM events WHERE user_id = ? AND LOWER(title) = ? LIMIT 1", [$user['id'], strtolower($targetTitleFromAI)])->take();
             }
 
-            // Auto-Create Fallback jika data target hilang total
+            // Fallback Auto-Create
             if (!$targetEvent) {
-                $eventResponse = $calendarController->createEventFromAI($user, !empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI'), $parsed['start'], $parsed['end']);
-                $timeStartStr = date('H:i', strtotime($parsed['start']));
-                $timeEndStr = date('H:i', strtotime($parsed['end']));
+                $eventResponse = $calendarController->createEventFromAI($user, !empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI'), $safeStartString, $safeEndString);
+                $timeStartStr = date('H:i', strtotime($safeStartString));
+                $timeEndStr = date('H:i', strtotime($safeEndString));
                 $successMessage = "Jadwal lama gak ketemu, tapi udah gue buatin jadwal baru buat \"" . (!empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI')) . "\" di jam $timeStartStr - $timeEndStr WIB! 📅✅";
 
                 $this->chatModel->saveMessage([
@@ -170,22 +171,22 @@ class ChatController
                 return response('success', $successMessage, [
                     'event' => [
                         'title' => !empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI'),
-                        'start' => date('c', strtotime($parsed['start'])),
-                        'end'   => date('c', strtotime($parsed['end']))
+                        'start' => date('Y-m-d H:i:s', strtotime($safeStartString)),
+                        'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
                     ]
                 ]);
             }
 
             $updateData = [
                 'title' => !empty($parsed['title']) ? $parsed['title'] : $targetEvent['title'],
-                'start' => $parsed['start'],
-                'end'   => $parsed['end']
+                'start' => $safeStartString,
+                'end'   => $safeEndString
             ];
 
             $calendarController->updateEvent($targetEvent['id'], $updateData);
 
-            $timeStartStr = date('H:i', strtotime($parsed['start']));
-            $timeEndStr = date('H:i', strtotime($parsed['end']));
+            $timeStartStr = date('H:i', strtotime($safeStartString));
+            $timeEndStr = date('H:i', strtotime($safeEndString));
             $successMessage = "Berhasil mengupdate kegiatan: \"" . $updateData['title'] . "\" menjadi jam $timeStartStr sampai $timeEndStr WIB! ✅";
 
             $this->chatModel->saveMessage([
@@ -195,14 +196,14 @@ class ChatController
             return response('success', $successMessage, [
                 'event' => [
                     'title' => $updateData['title'],
-                    'start' => date('c', strtotime($parsed['start'])),
-                    'end'   => date('c', strtotime($parsed['end']))
+                    'start' => date('Y-m-d H:i:s', strtotime($safeStartString)), // 🔥 FIX: Mengembalikan jam baru yang valid
+                    'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
                 ]
             ]);
 
         // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
-            $eventResponse = $calendarController->createEventFromAI($user, $parsed['title'], $parsed['start'], $parsed['end']);
+            $eventResponse = $calendarController->createEventFromAI($user, $parsed['title'], $safeStartString, $safeEndString);
 
             if ($eventResponse['status'] === 'clash') {
                 $clashMessage = "Gak bisa dijadwalkan brok, soalnya jam segitu lu ada jadwal tabrakan dengan kegiatan '" . $eventResponse['raw']['title'] . "'! 🛑";
@@ -224,27 +225,27 @@ class ChatController
             return response('success', 'Event berhasil dibuat via AI', [
                 'event' => [
                     'title' => $parsed['title'],
-                    'start' => date('c', strtotime($parsed['start'])),
-                    'end'   => date('c', strtotime($parsed['end']))
+                    'start' => date('Y-m-d H:i:s', strtotime($safeStartString)),
+                    'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
                 ]
             ]);
         }
     }
 
-    // 📖 LOGIC HISTORY - CLEAN DATA MURNI DARI BACKEND
+    // 📖 LOGIC HISTORY
     public function history()
     {
         $user = \Core\Middleware::Userget();
         $chatLogs = $this->chatModel->getChatHistory($user['id'], 20);
         $userEvents = $this->eventModel->getUserEvents($user['id']);
 
-        // Indexing data lokal di memori untuk mempercepat loading history
         $eventMap = [];
         foreach ($userEvents as $evt) {
             $eventMap[strtolower($evt['title'])] = [
                 'id'    => $evt['google_event_id'],
                 'title' => $evt['title'],
-                'start' => date('c', strtotime($evt['start_time'])),
+                // 🔥 FIX: history wajib pakai format ISO 'c' agar aman dirender object Date JavaScript Expo
+                'start' => date('c', strtotime($evt['start_time'])), 
                 'end'   => date('c', strtotime($evt['end_time']))
             ];
         }
@@ -254,7 +255,6 @@ class ChatController
         foreach ($chatLogs as $chat) {
             $eventData = null;
 
-            // 🧠 SINKRONISASI MATRIKS FRONTEND: Tarik judul murni menggunakan Regex minimalis yang aman
             if ($chat['role'] === 'assistant') {
                 if (preg_match('/kegiatan:\s*\"?(.+?)\"?\s*(?:✅|menjadi|di|$)/u', $chat['content'], $matches)) {
                     $titleKey = strtolower(trim($matches[1]));
@@ -275,7 +275,7 @@ class ChatController
                 'role'       => $chat['role'],
                 'content'    => $chat['content'],
                 'created_at' => date('c', strtotime($chat['created_at'])),
-                'event_data' => $eventData // Melempar data objek utuh, biar frontend lu bebas menyeleksinya!
+                'event_data' => $eventData
             ];
         }
 
@@ -283,7 +283,6 @@ class ChatController
     }
 
     private function callOpenClaw($systemPrompt, $userMessage) {
-        // ... Logika WebSocket Client OpenClaw lu tetap dipertahankan murni ...
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
         try {
             $client = new \WebSocket\Client($apiUrl, [
