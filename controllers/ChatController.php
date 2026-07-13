@@ -163,10 +163,22 @@ class ChatController
             $existingEvents = $this->eventModel->getUserEvents($user['id']);
             $targetEvent = null;
 
+            // 🚀 Coba cari dulu berdasarkan tebakan target_title dari AI
             foreach ($existingEvents as $evt) {
                 if (strtolower($evt['title'] ?? '') === strtolower($targetTitleFromAI ?? '')) {
                     $targetEvent = $evt;
                     break;
+                }
+            }
+
+            // 🔄 FALLBACK SAKTI: Kalau tebakan AI meleset, paksa cari pake judul asli yang ada di lampiran attached_event!
+            if (!$targetEvent && $attachedEvent) {
+                $attachedTitle = $attachedEvent['title'] ?? '';
+                foreach ($existingEvents as $evt) {
+                    if (strtolower($evt['title'] ?? '') === strtolower($attachedTitle)) {
+                        $targetEvent = $evt;
+                        break;
+                    }
                 }
             }
 
@@ -186,10 +198,9 @@ class ChatController
                 'end'   => $parsed['end']
             ];
 
-            // 🚀 Eksekusi update via CalendarController (Kembalikan ke first commit flow yang aman)
+            // Eksekusi update via CalendarController
             $googleResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
-            // Jika response di aplikasi lu langsung mencetak output, kita amankan bypass success message langsung di sini
             $timeStartStr = date('H:i', strtotime($parsed['start']));
             $timeEndStr = date('H:i', strtotime($parsed['end']));
             $successMessage = "Berhasil mengupdate kegiatan: \"" . $updateData['title'] . "\" menjadi jam $timeStartStr sampai $timeEndStr WIB! ✅";
