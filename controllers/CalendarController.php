@@ -196,7 +196,8 @@ class CalendarController
         }
 
         $formattedEvents = [];
-        $processedGoogleEventIds = []; // 🛡️ Anti-Duplikasi Sniper Array
+        // Gunakan kombinasi ID + Jam sebagai penanda unik agar tidak terjadi overwriting di memori loop
+        $processedComboKeys = []; 
 
         // 🚀 STEP 2: Looping setiap kalender (Primary, Python, Roblox, dll.)
         foreach ($calendars as $cal) {
@@ -220,12 +221,6 @@ class CalendarController
 
             // 🚀 STEP 3: Looping & Sinkronisasi event
             foreach ($items as $item) {
-                // Cegah memproses Google Event ID yang sama dua kali jika muncul di multi-calendar list
-                if (in_array($item['id'], $processedGoogleEventIds)) {
-                    continue;
-                }
-                $processedGoogleEventIds[] = $item['id'];
-
                 $start = $item['start']['dateTime'] ?? $item['start']['date'] ?? null;
                 $end = $item['end']['dateTime'] ?? $item['end']['date'] ?? null;
 
@@ -234,7 +229,17 @@ class CalendarController
                     $endTimeFormatted = $end ? date('Y-m-d H:i:s', strtotime($end)) : $startTimeFormatted;
                     $googleStatus = $item['status'] ?? 'confirmed';
 
-                    $existingEvent = $this->eventModel->findByGoogleEventId($item['id']);
+                    // Bikin kunci unik gabungan untuk loop memori
+                    $comboKey = $item['id'] . '_' . $startTimeFormatted;
+                    if (in_array($comboKey, $processedComboKeys)) {
+                        continue;
+                    }
+                    $processedComboKeys[] = $comboKey;
+
+                    // 🔍 FIX UTAMA: Cari di DB berdasarkan Google ID DAN Start Time agar slot jam 10, 13, 15 tidak saling menimpa!
+                    $db = new Database(require BASE_PATH . 'config.php');
+                    $queryCheck = "SELECT * FROM events WHERE google_event_id = ? AND start_time = ? LIMIT 1";
+                    $existingEvent = $db->query($queryCheck, [$item['id'], $startTimeFormatted])->take();
 
                     if ($googleStatus === 'cancelled') {
                         if ($existingEvent && $existingEvent['status'] !== 'cancelled') {
@@ -244,10 +249,8 @@ class CalendarController
                     }
 
                     if ($existingEvent) {
-                        // 🔥 PAKSA UPDATE: Jika waktu di DB lokal beda dengan Google, timpa dengan data Google yang bener!
                         if (
                             $existingEvent['title'] !== ($item['summary'] ?? '(Tanpa Judul)') ||
-                            strtotime($existingEvent['start_time']) !== strtotime($startTimeFormatted) ||
                             strtotime($existingEvent['end_time']) !== strtotime($endTimeFormatted) ||
                             $existingEvent['status'] !== 'active'
                         ) {
@@ -268,8 +271,6 @@ class CalendarController
                         ]);
                     }
 
-                    // 🔥 UTAMAKAN JAM DARI GOOGLE: Ambil langsung dari variabel mentah Google ($startTimeFormatted) 
-                    // agar tidak terpengaruh data lokal yang sempat tersangkut kemarin
                     $formattedEvents[] = [
                         'id' => $item['id'],
                         'title' => $item['summary'] ?? '(Tanpa Judul)',
@@ -282,7 +283,6 @@ class CalendarController
         
         return response('success', 'Sinkronisasi selesai brok!', $formattedEvents);
     }
-
     public function deleteEvent($id)
     {
         $user = \Core\Middleware::Userget();
