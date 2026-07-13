@@ -86,8 +86,6 @@ class ChatController
         // 🔍 REGEX SNIPER: Tarik paksa blok JSON dari jawaban AI
         // ========================================================
         $parsed = null;
-
-        // Bersihkan spasi/karakter aneh di ujung output AI
         $rawAiOutput = trim($rawAiOutput);
 
         if (preg_match('/\{[\s\S]*/', $rawAiOutput, $matches)) {
@@ -131,16 +129,31 @@ class ChatController
             $targetTitleFromAI = $attachedEvent['title'] ?? '';
         }
 
+        // Ambil ID yang di-attach dari frontend (jika ada)
+        $attachedId = $attachedEvent['id'] ?? null;
+
         // 1. ❌ AKSI MENGHAPUS JADWAL (DELETE)
         if (isset($parsed['action']) && $parsed['action'] === 'delete') {
             $existingEvents = $this->eventModel->getUserEvents($user['id']);
             $targetEvent = null;
 
-            foreach ($existingEvents as $evt) {
-                // Anti-Null Safe Core Injection (?? '')
-                if (strtolower($evt['title'] ?? '') === strtolower($targetTitleFromAI ?? '')) {
-                    $targetEvent = $evt;
-                    break;
+            // 🚀 STRATEGI 1: Cari berdasarkan ID Lampiran langsung (Paling Akurat)
+            if (!empty($attachedId)) {
+                foreach ($existingEvents as $evt) {
+                    if ($evt['id'] == $attachedId) {
+                        $targetEvent = $evt;
+                        break;
+                    }
+                }
+            }
+
+            // 🔄 FALLBACK 2: Jika ID meleset atau tidak ada, cari berdasarkan target_title tebakan AI
+            if (!$targetEvent) {
+                foreach ($existingEvents as $evt) {
+                    if (strtolower($evt['title'] ?? '') === strtolower($targetTitleFromAI ?? '')) {
+                        $targetEvent = $evt;
+                        break;
+                    }
                 }
             }
 
@@ -168,20 +181,32 @@ class ChatController
                 'deleted_title' => $targetEvent['title']
             ]);
 
-            // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
+        // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
         } elseif (isset($parsed['action']) && $parsed['action'] === 'update') {
             $existingEvents = $this->eventModel->getUserEvents($user['id']);
             $targetEvent = null;
 
-            // 🚀 Coba cari dulu berdasarkan tebakan target_title dari AI
-            foreach ($existingEvents as $evt) {
-                if (strtolower($evt['title'] ?? '') === strtolower($targetTitleFromAI ?? '')) {
-                    $targetEvent = $evt;
-                    break;
+            // 🚀 STRATEGI 1: Cari berdasarkan ID Lampiran langsung (Paling Akurat)
+            if (!empty($attachedId)) {
+                foreach ($existingEvents as $evt) {
+                    if ($evt['id'] == $attachedId) {
+                        $targetEvent = $evt;
+                        break;
+                    }
                 }
             }
 
-            // 🔄 FALLBACK SAKTI: Kalau tebakan AI meleset, paksa cari pake judul asli yang ada di lampiran attached_event!
+            // 🔄 FALLBACK 2: Coba cari berdasarkan tebakan target_title dari AI
+            if (!$targetEvent) {
+                foreach ($existingEvents as $evt) {
+                    if (strtolower($evt['title'] ?? '') === strtolower($targetTitleFromAI ?? '')) {
+                        $targetEvent = $evt;
+                        break;
+                    }
+                }
+            }
+
+            // 🔄 FALLBACK 3: Kalau tebakan AI meleset, cari pake judul asli di attached_event
             if (!$targetEvent && $attachedEvent) {
                 $attachedTitle = $attachedEvent['title'] ?? '';
                 foreach ($existingEvents as $evt) {
@@ -208,7 +233,7 @@ class ChatController
                 'end'   => $parsed['end']
             ];
 
-            // Eksekusi update via CalendarController
+            // Eksekusi update via CalendarController menggunakan ID asli dari DB
             $googleResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
             $timeStartStr = date('H:i', strtotime($parsed['start']));
@@ -229,7 +254,7 @@ class ChatController
                 ]
             ]);
 
-            // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
+        // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
             $eventResponse = $calendarController->createEventFromAI(
                 $user,
