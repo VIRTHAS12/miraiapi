@@ -166,38 +166,8 @@ class CalendarController
     // 📖 GET EVENTS
     public function getEvents()
     {
-        // 🔐 WAJIB DIATAS: Ambil user dan siapkan access token terlebih dahulu
         $user = \Core\Middleware::Userget();
-        
-        error_log("=== DEBUG SINKRONISASI START FOR USER ID: " . $user['id'] . " ===");
-
-        try {
-            $accessToken = $this->getValidAccessToken($user);
-            error_log("Access Token Berhasil Diambil: " . substr($accessToken, 0, 15) . "...");
-        } catch (\Exception $e) {
-            error_log("FATAL ERROR TOKEN: " . $e->getMessage());
-            return response('error', 'Gagal refresh token Google: ' . $e->getMessage(), null, 401);
-        }
-
-        // =======================================================================
-        // 🧪 TEST SNIPER: Langsung tembak ID kalender kelas kerjaan lu
-        // =======================================================================
-        $testCalendarId = 'c_classroom62a26e2e@group.calendar.google.com';
-        error_log("Mencoba langsung sniper fetch ke Kalender Kelas: " . $testCalendarId);
-        
-        $urlTest = "https://www.googleapis.com/calendar/v3/calendars/" . urlencode($testCalendarId) . "/events";
-        $chTest = curl_init($urlTest);
-        curl_setopt_array($chTest, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => ["Authorization: Bearer $accessToken"]
-        ]);
-        $responseTest = curl_exec($chTest);
-        $httpCodeTest = curl_getinfo($chTest, CURLINFO_HTTP_CODE);
-        curl_close($chTest);
-        
-        // LOG INI AKAN LANGSUNG MUNCUL DI PANEL LOGS RAILWAY LU!
-        error_log("RESPON SNIPER (HTTP {$httpCodeTest}): " . $responseTest);
-        // =======================================================================
+        $accessToken = $this->getValidAccessToken($user);
 
         // 🚀 STEP 1: Ambil daftar seluruh kalender
         $urlList = "https://www.googleapis.com/calendar/v3/users/me/calendarList?showHidden=true&minAccessRole=reader";
@@ -206,17 +176,13 @@ class CalendarController
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => ["Authorization: Bearer $accessToken"]
         ]);
-
         $listResponse = curl_exec($chList);
-        $httpCodeList = curl_getinfo($chList, CURLINFO_HTTP_CODE);
         curl_close($chList);
-
-        error_log("RESPON LIST KALENDER (HTTP {$httpCodeList}): " . $listResponse);
 
         $listResult = json_decode($listResponse, true);
         $calendars = $listResult['items'] ?? [];
 
-        // 🔥 STRATEGI FALLBACK: Jika list kosong/error, paksa masukkan target kalender ke antrean looping
+        $testCalendarId = 'c_classroom62a26e2e@group.calendar.google.com';
         $hasTargetCalendar = false;
         if (!empty($calendars)) {
             foreach ($calendars as $cal) {
@@ -225,18 +191,16 @@ class CalendarController
                 }
             }
         }
-
         if (!$hasTargetCalendar) {
-            error_log("Target kalender tidak ditemukan di list utama. Menjalankan mode Force Injection Fallback!");
             $calendars[] = ['id' => $testCalendarId];
         }
 
         $formattedEvents = [];
+        $processedGoogleEventIds = []; // 🛡️ Anti-Duplikasi Sniper Array
 
         // 🚀 STEP 2: Looping setiap kalender (Primary, Python, Roblox, dll.)
         foreach ($calendars as $cal) {
             $calendarId = $cal['id'];
-            error_log("Processing Calendar ID: " . $calendarId);
 
             $urlEvents = "https://www.googleapis.com/calendar/v3/calendars/" . urlencode($calendarId) . "/events";
             $chEvents = curl_init($urlEvents);
@@ -244,7 +208,6 @@ class CalendarController
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_HTTPHEADER => ["Authorization: Bearer $accessToken"]
             ]);
-
             $responseEvents = curl_exec($chEvents);
             curl_close($chEvents);
 
@@ -252,12 +215,17 @@ class CalendarController
             $items = $resultEvents['items'] ?? [];
 
             if (!isset($resultEvents['items'])) {
-                error_log("Gagal mengambil item untuk Kalender {$calendarId}. Respon: " . $responseEvents);
                 continue; 
             }
 
-            // 🚀 STEP 3: Looping & Sinkronisasi event dari kalender ini ke DB lokal
+            // 🚀 STEP 3: Looping & Sinkronisasi event
             foreach ($items as $item) {
+                // Cegah memproses Google Event ID yang sama dua kali jika muncul di multi-calendar list
+                if (in_array($item['id'], $processedGoogleEventIds)) {
+                    continue;
+                }
+                $processedGoogleEventIds[] = $item['id'];
+
                 $start = $item['start']['dateTime'] ?? $item['start']['date'] ?? null;
                 $end = $item['end']['dateTime'] ?? $item['end']['date'] ?? null;
 
@@ -276,10 +244,11 @@ class CalendarController
                     }
 
                     if ($existingEvent) {
+                        // 🔥 PAKSA UPDATE: Jika waktu di DB lokal beda dengan Google, timpa dengan data Google yang bener!
                         if (
                             $existingEvent['title'] !== ($item['summary'] ?? '(Tanpa Judul)') ||
-                            $existingEvent['start_time'] !== $startTimeFormatted ||
-                            $existingEvent['end_time'] !== $endTimeFormatted ||
+                            strtotime($existingEvent['start_time']) !== strtotime($startTimeFormatted) ||
+                            strtotime($existingEvent['end_time']) !== strtotime($endTimeFormatted) ||
                             $existingEvent['status'] !== 'active'
                         ) {
                             $this->eventModel->updateEvent($existingEvent['id'], [
@@ -299,20 +268,22 @@ class CalendarController
                         ]);
                     }
 
+                    // 🔥 UTAMAKAN JAM DARI GOOGLE: Ambil langsung dari variabel mentah Google ($startTimeFormatted) 
+                    // agar tidak terpengaruh data lokal yang sempat tersangkut kemarin
                     $formattedEvents[] = [
                         'id' => $item['id'],
                         'title' => $item['summary'] ?? '(Tanpa Judul)',
-                        'start_time' => $startTimeFormatted,
+                        'start_time' => $startTimeFormatted, 
                         'end_time' => $endTimeFormatted
                     ];
                 }
             }
         }
-
-        error_log("=== SINKRONISASI SELESAI. TOTAL EVENT BERHASIL DISINKRONKAN: " . count($formattedEvents) . " ===");
         
         return response('success', 'Sinkronisasi selesai brok!', $formattedEvents);
-    }    public function deleteEvent($id)
+    }
+
+    public function deleteEvent($id)
     {
         $user = \Core\Middleware::Userget();
 
@@ -343,8 +314,7 @@ class CalendarController
         return response('success', 'Event berhasil dihapus');
     }
 
-    // ✏️ UPDATE EVENT (Menerima parameter dataManual hasil ekstraksi Chat AI)
-    public function updateEvent($id, $dataManual = null)
+        public function updateEvent($id, $dataManual = null)
     {
         $user = \Core\Middleware::Userget();
         $input = $dataManual ?? jsonInput();
