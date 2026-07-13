@@ -299,8 +299,12 @@ class CalendarController
     {
         $user = \Core\Middleware::Userget();
 
-        // 🔍 FIX: Cari menggunakan findByGoogleEventId karena frontend mengirim Google ID string
-        $event = $this->eventModel->findByGoogleEventId($id);
+        // 🧠 DEFENSI POLIMORFIS: Cek apakah ID yang masuk berupa angka (Primary Key DB) atau string (Google ID)
+        if (is_numeric($id)) {
+            $event = $this->eventModel->findById($id);
+        } else {
+            $event = $this->eventModel->findByGoogleEventId($id);
+        }
 
         if (!$event) {
             return response('error', 'Event tidak ditemukan di DB lokal, brok.', null, 404);
@@ -308,8 +312,6 @@ class CalendarController
 
         $accessToken = $this->getValidAccessToken($user);
 
-        // PENTING: Karena shared/classroom calendar gak bisa dihapus sembarangan via primary bypass, 
-        // pastikan targetnya ke primary, atau handle soft-delete lokal jika ini kalender institusi
         $url = "https://www.googleapis.com/calendar/v3/calendars/primary/events/" . $event['google_event_id'];
 
         $ch = curl_init($url);
@@ -322,25 +324,28 @@ class CalendarController
         ]);
 
         $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        // Hapus dari DB lokal menggunakan ID primernya
+        // Hapus menggunakan primary key asli database lokal
         $this->eventModel->deleteEvent($event['id']);
 
         return response('success', 'Event berhasil dihapus dari sistem, brok!');
     }
 
-    // ✏️ UPDATE EVENT - FIXED PENCARIAN BERDASARKAN GOOGLE ID
     public function updateEvent($id, $dataManual = null)
     {
         $user = \Core\Middleware::Userget();
         $input = $dataManual ?? jsonInput();
 
-        // 🔍 FIX: Cari menggunakan findByGoogleEventId karena frontend mengirim Google ID string
-        $event = $this->eventModel->findByGoogleEventId($id);
+        // 🧠 DEFENSI POLIMORFIS: Cek apakah ID yang masuk berupa angka (Primary Key DB) atau string (Google ID)
+        if (is_numeric($id)) {
+            $event = $this->eventModel->findById($id);
+        } else {
+            $event = $this->eventModel->findByGoogleEventId($id);
+        }
+
         if (!$event) {
-            return response('error', 'Event tidak ditemukan untuk diupdate', null, 404);
+            return response('error', 'Event tidak ditemukan untuk diupdate di pangkalan lokal', null, 404);
         }
 
         $rawStart = isset($input['start']) ? $input['start'] : $event['start_time'] . ' +07:00';
@@ -349,7 +354,7 @@ class CalendarController
         $startTimeLocal = date('Y-m-d H:i:s', strtotime($rawStart));
         $endTimeLocal = date('Y-m-d H:i:s', strtotime($rawEnd));
 
-        // 🛑 STEP 3: Jalankan Pengecekan Clash Sebelum Update (Kecualikan ID event ini sendiri)
+        // Jalankan Pengecekan Clash (Kecualikan ID event ini sendiri)
         $clashEvent = $this->eventModel->checkClash($user['id'], $startTimeLocal, $endTimeLocal, $event['id']);
         if ($clashEvent) {
             return response('error', "Gagal update! Bentrok dengan jadwal '" . $clashEvent['title'] . "', brok.", $clashEvent, 409);
@@ -369,7 +374,6 @@ class CalendarController
             ]
         ];
 
-        // Update target ke Google Calendar primary
         $url = "https://www.googleapis.com/calendar/v3/calendars/primary/events/" . $event['google_event_id'];
 
         $ch = curl_init($url);
@@ -386,7 +390,7 @@ class CalendarController
         $response = curl_exec($ch);
         curl_close($ch);
 
-        // Eksekusi update ke Model lokal menggunakan id database internal
+        // Eksekusi update menggunakan ID primernya
         $this->eventModel->updateEvent($event['id'], [
             'title' => $eventData['summary'],
             'start_time' => $startTimeLocal,
