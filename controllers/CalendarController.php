@@ -255,7 +255,7 @@ class CalendarController
         $endTimeLocal = date('Y-m-d H:i:s', strtotime($rawEnd));
 
         // 🛑 STEP 3: Jalankan Pengecekan Clash Sebelum Update (Kecualikan ID event ini sendiri)
-        $clashEvent = $this->eventModel->checkClash($user['id'], $startTimeLocal, $endTimeLocal, $id);
+        $clashEvent = $this->eventModel->checkClash($user['id'], $startTimeLocal, $endTimeLocal, $event['id']);
         if ($clashEvent) {
             return response('error', "Gagal update! Bentrok dengan jadwal '" . $clashEvent['title'] . "', brok.", $clashEvent, 409);
         }
