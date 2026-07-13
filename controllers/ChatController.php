@@ -330,7 +330,6 @@ class ChatController
 
             // 1. Handshake
             $handshake = $client->receive();
-            file_put_contents('debug_openclaw.log', "HANDSHAKE:\n$handshake\n\n", FILE_APPEND);
 
             // 2. Connect payload
             $connectPayload = [
@@ -341,7 +340,6 @@ class ChatController
                     "minProtocol" => 4,
                     "maxProtocol" => 4,
                     "client"      => [
-                        // 🔥 MENYAMAR JADI CONTROL UI RESMI!
                         "id"       => "openclaw-control-ui",
                         "version"  => "control-ui",
                         "platform" => "Linux x86_64",
@@ -350,7 +348,6 @@ class ChatController
                     "role"   => "operator",
                     "scopes" => ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
                     "auth"   => [
-                        // Tetap bawa password Funnel lu yang valid
                         "password" => "kurokaze"
                     ]
                 ]
@@ -359,7 +356,6 @@ class ChatController
 
             // 3. Auth
             $auth = $client->receive();
-            file_put_contents('debug_openclaw.log', "AUTH:\n$auth\n\n", FILE_APPEND);
             $authDecoded = json_decode($auth, true);
 
             if (!($authDecoded['ok'] ?? false)) {
@@ -386,16 +382,14 @@ class ChatController
             ];
 
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
-            file_put_contents('debug_openclaw.log', "PROMPT SENT\n", FILE_APPEND);
 
-            // 5. Streaming Loop Response Handler (Anti Gantung)
+            // 5. Streaming Loop Response Handler
             $aiTextResponse = "";
 
             while (true) {
                 $msg = $client->receive();
                 if (!$msg) break;
 
-                file_put_contents('debug_openclaw.log', "RECV FRAME: $msg\n", FILE_APPEND);
                 $decoded = json_decode($msg, true);
 
                 // Langsung skip jika frame hanya berupa tick/health keep-alive
@@ -404,7 +398,6 @@ class ChatController
                 }
 
                 if (isset($decoded['type']) && $decoded['type'] === 'event') {
-                    // 🔥 PERBAIKAN PERCEPATAN: Hanya ambil dari 'chat' agar teks gak double
                     if ($decoded['event'] === 'chat') {
 
                         $chunkText = $decoded['payload']['deltaText'] ?? '';
@@ -412,14 +405,19 @@ class ChatController
                         if (!empty($chunkText)) {
                             $aiTextResponse .= $chunkText;
 
-                            // 🚀 BREAK EARLY: Cek apakah string respons sudah mengandung format JSON utuh
-                            // Jika ya, gak usah nungguin AI selesai ngetik sampai "final", langsung hajar!
-                            if (preg_match('/\{[\s\S]*\}/', $aiTextResponse)) {
-                                break;
+                            // 🚀 BREAK EARLY SUPER AMAN: 
+                            // Pastikan string bener-bener JSON valid (bukan sekadar regex)
+                            $startPos = strpos($aiTextResponse, '{');
+                            if ($startPos !== false) {
+                                $jsonCandidate = substr($aiTextResponse, $startPos);
+                                json_decode($jsonCandidate);
+                                // Jika tidak ada error saat decode, berarti JSON udah lengkap 100%
+                                if (json_last_error() === JSON_ERROR_NONE) {
+                                    break;
+                                }
                             }
                         }
 
-                        // Tetap kita sisakan fallback ke "final" jaga-jaga kalau string-nya gantung
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             if (isset($decoded['payload']['message']['content'][0]['text'])) {
                                 $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
@@ -444,7 +442,13 @@ class ChatController
                 }
             }
 
-            $client->close();
+            // 🔥 PERBAIKAN FATAL: Abaikan error saat nutup paksa koneksi
+            // PHP suka panic kalau diputus saat sisa data (final state) masih dikirim server
+            try {
+                $client->close();
+            } catch (\Throwable $e) {
+                // Cuekin aja, emang sengaja kita putus sepihak biar cepet responsnya!
+            }
 
             if (!empty($aiTextResponse)) {
                 return [
