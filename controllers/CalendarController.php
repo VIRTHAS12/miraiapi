@@ -169,7 +169,7 @@ class CalendarController
         $user = \Core\Middleware::Userget();
         $accessToken = $this->getValidAccessToken($user);
 
-        // 🚀 STEP 1: Ambil daftar seluruh kalender
+        // 🚀 STEP 1: Ambil daftar seluruh kalender dari Google
         $urlList = "https://www.googleapis.com/calendar/v3/users/me/calendarList?showHidden=true&minAccessRole=reader";
         $chList = curl_init($urlList);
         curl_setopt_array($chList, [
@@ -195,11 +195,26 @@ class CalendarController
             $calendars[] = ['id' => $testCalendarId];
         }
 
+        // =======================================================================
+        // ⚡ OPSI OPTIMASI: EAGER LOADING DATA LOKAL SEKALIGUS
+        // =======================================================================
+        $db = new Database(require BASE_PATH . 'config.php');
+
+        // Ambil seluruh event milik user ini dari DB lokal sekaligus (Cuma 1x Query!)
+        $localEventsRaw = $db->query("SELECT * FROM events WHERE user_id = ?", [$user['id']])->get();
+
+        // Petakan ke array associative berbasis Key Unik (GoogleID + StartTime)
+        $localEventsCache = [];
+        foreach ($localEventsRaw as $localEvt) {
+            $key = $localEvt['google_event_id'] . '_' . $localEvt['start_time'];
+            $localEventsCache[$key] = $localEvt;
+        }
+        // =======================================================================
+
         $formattedEvents = [];
-        // Gunakan kombinasi ID + Jam sebagai penanda unik agar tidak terjadi overwriting di memori loop
         $processedComboKeys = [];
 
-        // 🚀 STEP 2: Looping setiap kalender (Primary, Python, Roblox, dll.)
+        // 🚀 STEP 2: Looping setiap kalender dari Google (Primary, Python, Roblox, dll.)
         foreach ($calendars as $cal) {
             $calendarId = $cal['id'];
 
@@ -229,17 +244,14 @@ class CalendarController
                     $endTimeFormatted = $end ? date('Y-m-d H:i:s', strtotime($end)) : $startTimeFormatted;
                     $googleStatus = $item['status'] ?? 'confirmed';
 
-                    // Bikin kunci unik gabungan untuk loop memori
                     $comboKey = $item['id'] . '_' . $startTimeFormatted;
                     if (in_array($comboKey, $processedComboKeys)) {
                         continue;
                     }
                     $processedComboKeys[] = $comboKey;
 
-                    // 🔍 FIX UTAMA: Cari di DB berdasarkan Google ID DAN Start Time agar slot jam 10, 13, 15 tidak saling menimpa!
-                    $db = new Database(require BASE_PATH . 'config.php');
-                    $queryCheck = "SELECT * FROM events WHERE google_event_id = ? AND start_time = ? LIMIT 1";
-                    $existingEvent = $db->query($queryCheck, [$item['id'], $startTimeFormatted])->take();
+                    // 🔍⚡ CEK EAGER LOADING CACHE (Bukan tembak Query SQL lagi!)
+                    $existingEvent = $localEventsCache[$comboKey] ?? null;
 
                     if ($googleStatus === 'cancelled') {
                         if ($existingEvent && $existingEvent['status'] !== 'cancelled') {
@@ -281,7 +293,7 @@ class CalendarController
             }
         }
 
-        return response('success', 'Sinkronisasi selesai brok!', $formattedEvents);
+        return response('success', 'Sinkronisasi super cepat selesai brok!', $formattedEvents);
     }
     public function deleteEvent($id)
     {

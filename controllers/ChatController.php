@@ -86,8 +86,18 @@ class ChatController
         // 🔍 REGEX SNIPER: Tarik paksa blok JSON dari jawaban AI
         // ========================================================
         $parsed = null;
-        if (preg_match('/\{[\s\S]*\}/', $rawAiOutput, $matches)) {
-            $cleanJsonString = $matches[0];
+
+        // Bersihkan spasi/karakter aneh di ujung output AI
+        $rawAiOutput = trim($rawAiOutput);
+
+        if (preg_match('/\{[\s\S]*/', $rawAiOutput, $matches)) {
+            $cleanJsonString = trim($matches[0]);
+
+            // 🔥 FALLBACK FIXER: Jika string diawali '{' tapi ujungnya bukan '}', tambal manual!
+            if (str_starts_with($cleanJsonString, '{') && !str_ends_with($cleanJsonString, '}')) {
+                $cleanJsonString .= '}';
+            }
+
             $parsed = json_decode($cleanJsonString, true);
         }
 
@@ -158,7 +168,7 @@ class ChatController
                 'deleted_title' => $targetEvent['title']
             ]);
 
-        // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
+            // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
         } elseif (isset($parsed['action']) && $parsed['action'] === 'update') {
             $existingEvents = $this->eventModel->getUserEvents($user['id']);
             $targetEvent = null;
@@ -219,7 +229,7 @@ class ChatController
                 ]
             ]);
 
-        // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
+            // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
             $eventResponse = $calendarController->createEventFromAI(
                 $user,
@@ -274,8 +284,7 @@ class ChatController
 
                 if (preg_match('/Berhasil menjadwalkan kegiatan:\s*(.+?)(?:\s*✅)?$/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
-                }
-                elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
+                } elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
                 }
 
