@@ -241,10 +241,9 @@ class ChatController
 
         $eventMap = [];
         foreach ($userEvents as $evt) {
-            $eventMap[strtolower($evt['title'])] = [
+            $eventMap[strtolower(trim($evt['title']))] = [
                 'id'    => $evt['google_event_id'],
                 'title' => $evt['title'],
-                // 🔥 FIX: history wajib pakai format ISO 'c' agar aman dirender object Date JavaScript Expo
                 'start' => date('c', strtotime($evt['start_time'])), 
                 'end'   => date('c', strtotime($evt['end_time']))
             ];
@@ -256,7 +255,8 @@ class ChatController
             $eventData = null;
 
             if ($chat['role'] === 'assistant') {
-                if (preg_match('/kegiatan:\s*\"?(.+?)\"?\s*(?:✅|menjadi|di|$)/u', $chat['content'], $matches)) {
+                // Modifikasi regex agar toleran dan membuang tanda kutip \" atau " secara paksa
+                if (preg_match('/kegiatan:\s*[\"\\\']*([^\"\\\']+)/u', $chat['content'], $matches)) {
                     $titleKey = strtolower(trim($matches[1]));
                     if (isset($eventMap[$titleKey])) {
                         $eventData = $eventMap[$titleKey];
@@ -281,7 +281,6 @@ class ChatController
 
         return response('success', 'Riwayat chat asisten berhasil dimuat.', $formattedData);
     }
-
     private function callOpenClaw($systemPrompt, $userMessage) {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
         try {
