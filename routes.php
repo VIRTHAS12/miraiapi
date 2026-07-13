@@ -1,7 +1,7 @@
 <?php
 
 return function ($router) {
-    $router->get('/api/auth/google', 'Api/Auth/login_google.php'); 
+    $router->get('/api/auth/google', 'Api/Auth/login_google.php');
     $router->get('/api/auth/google/callback', 'Api/Auth/callback.php');
     $router->post('/api/auth/refresh-token', 'Api/Auth/refresh_token.php'); // Buat perpanjang token
     $router->get('/api/auth/config', 'Api/Auth/config.php');
