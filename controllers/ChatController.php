@@ -111,7 +111,7 @@ class ChatController
         }
 
         // ========================================================
-        // 🔀 PERCABANGAN AKSI: CREATE VS UPDATE
+        // 🔀 PERCABANGAN AKSI: CREATE VS UPDATE VS DELETE
         // ========================================================
         $calendarController = new \Controllers\CalendarController();
 
@@ -151,7 +151,7 @@ class ChatController
                 'deleted_title' => $targetEvent['title']
             ]);
 
-            // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
+        // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
         } elseif (isset($parsed['action']) && $parsed['action'] === 'update') {
             $existingEvents = $this->eventModel->getUserEvents($user['id']);
             $targetEvent = null;
@@ -182,7 +182,7 @@ class ChatController
             // Eksekusi update via CalendarController
             $googleResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
-            // 🔥 PERBAIKAN FATAL ERROR: Tangani tipe response dari calendar controller dengan benar (tanpa getBody)
+            // Tangani tipe response dari calendar controller dengan benar
             $responseData = is_array($googleResponse) ? $googleResponse : json_decode((string) $googleResponse, true);
 
             if (isset($responseData['status']) && $responseData['status'] === 'error') {
@@ -214,9 +214,8 @@ class ChatController
                 'google_response' => $responseData
             ]);
 
-            // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
+        // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
-            // 🔥 JALANKAN DULU fungsinya, jangan langsung simpan pesan sukses ke DB!
             $eventResponse = $calendarController->createEventFromAI(
                 $user,
                 $parsed['title'],
@@ -224,7 +223,7 @@ class ChatController
                 $parsed['end']
             );
 
-            // 🔥 TANGANI JIKA BENTROK (CLASH)
+            // TANGANI JIKA BENTROK (CLASH)
             if ($eventResponse['status'] === 'clash') {
                 $clashMessage = "Gak bisa dijadwalkan brok, soalnya jam segitu lu ada jadwal tabrakan dengan kegiatan '" . $eventResponse['raw']['title'] . "'! 🛑";
 
@@ -242,7 +241,6 @@ class ChatController
                 return response('error', $eventResponse['message'], $eventResponse['raw'], 500);
             }
 
-            // JIKA SELESAI DAN SUKSES, BARU SIMPAN PESAN SUKSES KE DB CHAT
             $successMessage = "Berhasil menjadwalkan kegiatan: " . $parsed['title'] . " ✅";
             $this->chatModel->saveMessage([
                 'user_id' => $user['id'],
@@ -273,16 +271,15 @@ class ChatController
             if ($chat['role'] === 'assistant') {
                 $extractedTitle = null;
 
-                // 🔥 REGEX 1: Deteksi kalimat sukses Create (Bisa handle centang/emoji di ujung)
+                // 🔥 REGEX 1: Deteksi kalimat sukses Create
                 if (preg_match('/Berhasil menjadwalkan kegiatan:\s*(.+?)(?:\s*✅)?$/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
                 }
-                // 🔥 REGEX 2: Deteksi kalimat sukses Update agar dapet card juga pas dimuat ulang
+                // 🔥 REGEX 2: Deteksi kalimat sukses Update
                 elseif (preg_match('/Berhasil mengupdate kegiatan:\s*"(.+?)"/u', $chat['content'], $matches)) {
                     $extractedTitle = trim($matches[1]);
                 }
 
-                // Jika judul berhasil ditarik, cari object-nya di list event user
                 if ($extractedTitle) {
                     foreach ($userEvents as $evt) {
                         if (strtolower($evt['title']) === strtolower($extractedTitle)) {
@@ -401,41 +398,37 @@ class ChatController
                     continue;
                 }
 
-                if (isset($decoded['type']) && $decoded['type'] === 'event') {
-                    if ($decoded['event'] === 'chat') {
-
-                        $chunkText = $decoded['payload']['deltaText'] ?? '';
-
-                        if (!empty($chunkText)) {
-                            $aiTextResponse .= $chunkText;
-
-                            // 🚀 BREAK EARLY SUPER AMAN: 
-                            // Pastikan string bener-bener JSON valid (bukan sekadar regex)
-                            $startPos = strpos($aiTextResponse, '{');
-                            if ($startPos !== false) {
-                                $jsonCandidate = substr($aiTextResponse, $startPos);
-                                json_decode($jsonCandidate);
-                                // Jika tidak ada error saat decode, berarti JSON udah lengkap 100%
-                                if (json_last_error() === JSON_ERROR_NONE) {
-                                    file_put_contents('debug_openclaw.log', "🔥 [SYSTEM] JSON Valid Terdeteksi! Memutus koneksi (Break Early)...\n", FILE_APPEND);
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
-                            if (isset($decoded['payload']['message']['content'][0]['text'])) {
-                                $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
-                            }
-                            break;
-                        }
-
-                        if (isset($decoded['payload']['done']) && $decoded['payload']['done'] === true) {
-                            break;
-                        }
+                // Cek lifecycle state dari OpenClaw Gateway untuk selesai dengan aman
+                if (isset($decoded['type']) && $decoded['type'] === 'event' && $decoded['event'] === 'agent') {
+                    $stream = $decoded['payload']['stream'] ?? '';
+                    $phase = $decoded['payload']['data']['phase'] ?? '';
+                    
+                    if ($stream === 'lifecycle' && $phase === 'end') {
+                        file_put_contents('debug_openclaw.log', "🔥 [SYSTEM] Sesi AI Selesai Secara Normal (Lifecycle End).\n", FILE_APPEND);
+                        break;
                     }
                 }
 
+                // Tarik teks delta dari model
+                if (isset($decoded['type']) && $decoded['type'] === 'event' && $decoded['event'] === 'chat') {
+                    $chunkText = $decoded['payload']['deltaText'] ?? '';
+                    if (!empty($chunkText)) {
+                        $aiTextResponse .= $chunkText;
+                    }
+
+                    if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
+                        if (isset($decoded['payload']['message']['content'][0]['text'])) {
+                            $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
+                        }
+                        break;
+                    }
+
+                    if (isset($decoded['payload']['done']) && $decoded['payload']['done'] === true) {
+                        break;
+                    }
+                }
+
+                // Handler jika response dikembalikan langsung via direct Request ID
                 if (isset($decoded['id']) && $decoded['id'] === $requestId) {
                     if (isset($decoded['payload']['message']['content'][0]['text'])) {
                         $aiTextResponse = $decoded['payload']['message']['content'][0]['text'];
@@ -447,12 +440,11 @@ class ChatController
                 }
             }
 
-            // 🔥 PERBAIKAN FATAL: Abaikan error saat nutup paksa koneksi
-            // PHP suka panic kalau diputus saat sisa data (final state) masih dikirim server
+            // Tutup koneksi secara bersih setelah loop selesai
             try {
                 $client->close();
             } catch (\Throwable $e) {
-                // Cuekin aja, emang sengaja kita putus sepihak biar cepet responsnya!
+                // Dimatikan pelan agar tidak panic
             }
 
             if (!empty($aiTextResponse)) {

@@ -41,6 +41,12 @@ class CalendarController
         ]);
 
         $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        
+        // 🔥 FIX BUG: Mengganti $apiResponse menjadi $response agar log error tidak crash
+        if ($httpCode !== 200) {
+            file_put_contents('debug_google.log', "OAuth Refresh Error | Code: $httpCode | Response: " . $response . PHP_EOL, FILE_APPEND);
+        }
         curl_close($ch);
 
         $data = json_decode($response, true);
@@ -206,11 +212,18 @@ class CalendarController
     }
 
     // ❌ DELETE EVENT
-    public function deleteEvent($id)
+    public function deleteEvent($id = null)
     {
         $user = \Core\Middleware::Userget();
+        
+        // Mengakomodasi parsing ID dari query string API routes (?id=X) jika diakses langsung via HTTP DELETE
+        $eventId = $id ?? ($_GET['id'] ?? null);
 
-        $event = $this->eventModel->findById($id);
+        if (!$eventId) {
+            return response('error', 'ID Event wajib disertakan', null, 400);
+        }
+
+        $event = $this->eventModel->findById($eventId);
 
         if (!$event) {
             return response('error', 'Event tidak ditemukan di DB lokal', null, 404);
@@ -232,23 +245,31 @@ class CalendarController
         curl_exec($ch);
         curl_close($ch);
 
-        $this->eventModel->deleteEvent($id);
+        $this->eventModel->deleteEvent($eventId);
 
         return response('success', 'Event berhasil dihapus');
     }
 
-    // ✏️ UPDATE EVENT (Sekarang aman dipanggil dari frontend maupun internal AI)
-    public function updateEvent($id, $dataManual = null)
+    // ✏️ UPDATE EVENT (Aman untuk Route HTTP PUT manual & Internal Chat AI)
+    public function updateEvent($id = null, $dataManual = null)
     {
         $user = \Core\Middleware::Userget();
 
-        // 🔥 Deteksi: Kalau ada $dataManual, berarti dipanggil dari Chat AI (Internal)
+        // 🔥 Deteksi context: Kalau ada $dataManual, berarti dipanggil dari Chat AI (Internal)
         $isInternal = ($dataManual !== null);
         $input = $dataManual ?? jsonInput();
+        
+        // Mengakomodasi parsing ID dari argument internal ATAU URL Query string (?id=X) dari router
+        $eventId = $id ?? ($input['id'] ?? ($_GET['id'] ?? null));
 
-        $event = $this->eventModel->findById($id);
+        if (!$eventId) {
+            $msg = 'ID Event tidak ditemukan';
+            return $isInternal ? ['status' => 'error', 'message' => $msg] : response('error', $msg, null, 400);
+        }
+
+        $event = $this->eventModel->findById($eventId);
         if (!$event) {
-            $msg = 'Event tidak ditemukan';
+            $msg = 'Event tidak ditemukan di database';
             return $isInternal ? ['status' => 'error', 'message' => $msg] : response('error', $msg, null, 404);
         }
 
@@ -259,7 +280,7 @@ class CalendarController
         $endTimeLocal = date('Y-m-d H:i:s', strtotime($rawEnd));
 
         // 🛑 STEP 3: Jalankan Pengecekan Clash Sebelum Update (Kecualikan ID event ini sendiri)
-        $clashEvent = $this->eventModel->checkClash($user['id'], $startTimeLocal, $endTimeLocal, $id);
+        $clashEvent = $this->eventModel->checkClash($user['id'], $startTimeLocal, $endTimeLocal, $eventId);
         if ($clashEvent) {
             $msg = "Gagal update! Bentrok dengan jadwal '" . $clashEvent['title'] . "', brok.";
             return $isInternal
@@ -302,25 +323,27 @@ class CalendarController
         ]);
 
         $apiResponse = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
         $decodedResponse = json_decode($apiResponse, true);
 
-        // Handle error dari API Google
-        if (isset($decodedResponse['error'])) {
-            $msg = $decodedResponse['error']['message'] ?? 'Gagal update di Google Calendar';
+        // Handle error dari API Google Calendar
+        if ($httpCode !== 200 || isset($decodedResponse['error'])) {
+            $msg = $decodedResponse['error']['message'] ?? 'Gagal update di Google Calendar API';
+            file_put_contents('debug_google.log', "PUT Update Error | Code: $httpCode | Response: " . $apiResponse . PHP_EOL, FILE_APPEND);
+            
             return $isInternal
                 ? ['status' => 'error', 'message' => $msg, 'raw' => $decodedResponse]
                 : response('error', $msg, $decodedResponse, 500);
         }
 
-        $this->eventModel->updateEvent($id, [
+        $this->eventModel->updateEvent($eventId, [
             'title' => $eventData['summary'],
             'start_time' => $startTimeLocal,
             'end_time' => $endTimeLocal
         ]);
 
-        // 🔥 Return berupa array murni kalau dari Chat AI, return object response kalau dari Frontend
         return $isInternal
             ? ['status' => 'success', 'raw' => $decodedResponse]
             : response('success', 'Event berhasil diupdate', $decodedResponse);
