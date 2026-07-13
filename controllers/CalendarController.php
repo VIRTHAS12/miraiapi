@@ -166,11 +166,31 @@ class CalendarController
     // 📖 GET EVENTS
     public function getEvents()
     {
+        // 🔐 WAJIB DIATAS: Ambil user dan siapkan access token terlebih dahulu!
         $user = \Core\Middleware::Userget();
         $accessToken = $this->getValidAccessToken($user);
 
-        // 🚀 STEP 1: Ambil semua daftar kalender (List) yang diakses oleh user
-        $chList = curl_init("https://www.googleapis.com/calendar/v3/users/me/calendarList");
+        // =======================================================================
+        // 🧪 SNIPER DEBUG LOG: Tembak langsung ID Kalender Kelas lu ke file log lokal
+        // =======================================================================
+        $testCalendarId = urlencode('c_classroom62a26e2e@group.calendar.google.com');
+        $urlTest = "https://www.googleapis.com/calendar/v3/calendars/{$testCalendarId}/events";
+        $chTest = curl_init($urlTest);
+        curl_setopt_array($chTest, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                "Authorization: Bearer $accessToken"
+            ]
+        ]);
+        $responseTest = curl_exec($chTest);
+        curl_close($chTest);
+        // Tulis isi respon mentah dari Google ke file log biar lu bisa pantau isinya
+        file_put_contents('debug_raw_google.log', $responseTest);
+        // =======================================================================
+
+        // 🚀 STEP 1: Ambil daftar seluruh kalender (Termasuk yang hidden/shared dari institusi)
+        $urlList = "https://www.googleapis.com/calendar/v3/users/me/calendarList?showHidden=true&minAccessRole=reader";
+        $chList = curl_init($urlList);
         curl_setopt_array($chList, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => [
@@ -192,7 +212,7 @@ class CalendarController
 
         // 🚀 STEP 2: Looping setiap kalender yang lu punya (Primary, Python, Roblox, dll.)
         foreach ($calendars as $cal) {
-            $calendarId = $cal['id']; // Mengambil ID dinamis, misal: c_classroom...
+            $calendarId = $cal['id'];
 
             // Tembak API events untuk ID kalender saat ini
             $urlEvents = "https://www.googleapis.com/calendar/v3/calendars/" . urlencode($calendarId) . "/events";
@@ -268,7 +288,7 @@ class CalendarController
 
         // 🚀 STEP 4: Kembalikan semua gabungan event kalender ke frontend
         return response('success', 'Semua list kalender berhasil disinkronkan', $formattedEvents);
-    }    // ❌ DELETE EVENT
+    }
     public function deleteEvent($id)
     {
         $user = \Core\Middleware::Userget();
