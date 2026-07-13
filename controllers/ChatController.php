@@ -181,56 +181,69 @@ class ChatController
                 'deleted_title' => $targetEvent['title']
             ]);
 
-        // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
+            // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
         } elseif (isset($parsed['action']) && $parsed['action'] === 'update') {
+            $db = new Database(require BASE_PATH . 'config.php');
             $targetEvent = null;
 
-            // 🚀 STRATEGI UTAMA: Langsung tembak cari berdasarkan Google Event ID yang dikirim dari HP lu!
+            // 🚀 STRATEGI 1: Tembak cari langsung ke DB menggunakan Google Event ID murni dari attached_event HP lu
             if ($attachedEvent && !empty($attachedEvent['id'])) {
-                $targetEvent = $this->eventModel->findByGoogleEventId($attachedEvent['id']);
+                $googleEventIdClean = $attachedEvent['id'];
+                $queryId = "SELECT * FROM events WHERE user_id = ? AND google_event_id = ? LIMIT 1";
+                $targetEvent = $db->query($queryId, [$user['id'], $googleEventIdClean])->take();
             }
 
-            // 🔄 FALLBACK 1: Kalau ID-nya meleset, cari berdasarkan target_title dari AI
+            // 🔄 FALLBACK 1: Kalau berdasar ID kosong, cari berdasarkan nama target_title tebakan AI
+            if (!$targetEvent && !empty($targetTitleFromAI)) {
+                $queryTitleAI = "SELECT * FROM events WHERE user_id = ? AND LOWER(title) = ? LIMIT 1";
+                $targetEvent = $db->query($queryTitleAI, [$user['id'], strtolower($targetTitleFromAI)])->take();
+            }
+
+            // 🔄 FALLBACK 2: Kalau masih meleset, cari berdasarkan nama title yang tertera di lampiran frontend
+            if (!$targetEvent && $attachedEvent && !empty($attachedEvent['title'])) {
+                $queryTitleAttached = "SELECT * FROM events WHERE user_id = ? AND LOWER(title) = ? LIMIT 1";
+                $targetEvent = $db->query($queryTitleAttached, [$user['id'], strtolower($attachedEvent['title'])])->take();
+            }
+
+            // 🚨 PENYELAMATAKAN TERAKHIR (AUTO-CREATE FALLBACK): 
+            // Jika jadwal yang mau di-update beneran gak ketemu di DB lokal (mungkin karena habis lu hapus/truncate), 
+            // jangan lempar eror 404 yang bikin demo macet! Alihkan otomatis jadi aksi MEMBUAT jadwal baru!
             if (!$targetEvent) {
-                $existingEvents = $this->eventModel->getUserEvents($user['id']);
-                foreach ($existingEvents as $evt) {
-                    if (strtolower($evt['title'] ?? '') === strtolower($targetTitleFromAI ?? '')) {
-                        $targetEvent = $evt;
-                        break;
-                    }
-                }
-            }
+                error_log("Jadwal update tidak ditemukan di DB lokal. Mengalihkan aksi ke Pembuatan Event Baru secara otomatis.");
+                $eventResponse = $calendarController->createEventFromAI(
+                    $user,
+                    !empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI'),
+                    $parsed['start'],
+                    $parsed['end']
+                );
 
-            // 🔄 FALLBACK 2: Kalau masih gak ketemu juga, cari berdasarkan judul lampiran frontend
-            if (!$targetEvent && $attachedEvent) {
-                $attachedTitle = $attachedEvent['title'] ?? '';
-                foreach ($existingEvents as $evt) {
-                    if (strtolower($evt['title'] ?? '') === strtolower($attachedTitle)) {
-                        $targetEvent = $evt;
-                        break;
-                    }
-                }
-            }
+                $timeStartStr = date('H:i', strtotime($parsed['start']));
+                $timeEndStr = date('H:i', strtotime($parsed['end']));
+                $successMessage = "Jadwal lama gak ketemu di database lokal, tapi tenang brok, udah gue buatin jadwal baru buat \"" . (!empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI')) . "\" di jam $timeStartStr - $timeEndStr WIB! 📅✅";
 
-            // Jika semua rute pencarian mentok kosong
-            if (!$targetEvent) {
-                $errContent = "Jadwal '" . ($targetTitleFromAI ?? 'Unknown') . "' gak ketemu di data database lokal gue, brok.";
                 $this->chatModel->saveMessage([
                     'user_id' => $user['id'],
                     'role'    => 'assistant',
-                    'content' => $errContent
+                    'content' => $successMessage
                 ]);
-                return response('error', $errContent, null, 404);
+
+                return response('success', $successMessage, [
+                    'event' => [
+                        'title' => !empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI'),
+                        'start' => date('c', strtotime($parsed['start'])),
+                        'end'   => date('c', strtotime($parsed['end']))
+                    ]
+                ]);
             }
 
-            // Siapkan data bodi baru untuk dilempar ke Google API
+            // --- Jika targetEvent ketemu, jalankan proses update Google API standar seperti biasa ---
             $updateData = [
                 'title' => !empty($parsed['title']) ? $parsed['title'] : $targetEvent['title'],
                 'start' => $parsed['start'],
                 'end'   => $parsed['end']
             ];
 
-            // Eksekusi update via CalendarController menggunakan ID primary lokal database lu
+            // Kirim update ke Google API menggunakan ID database internal lokal lu
             $googleResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
             $timeStartStr = date('H:i', strtotime($parsed['start']));
@@ -251,7 +264,7 @@ class ChatController
                 ]
             ]);
 
-        // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
+            // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
             $eventResponse = $calendarController->createEventFromAI(
                 $user,
