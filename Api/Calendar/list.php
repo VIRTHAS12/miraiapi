@@ -5,4 +5,4 @@ use Controllers\CalendarController;
 \Core\Middleware::auth();
 
 $controller = new CalendarController();
-return $controller->getLocalEvents();
+return $controller->getEvents();
