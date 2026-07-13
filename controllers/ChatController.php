@@ -183,21 +183,16 @@ class ChatController
 
         // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
         } elseif (isset($parsed['action']) && $parsed['action'] === 'update') {
-            $existingEvents = $this->eventModel->getUserEvents($user['id']);
             $targetEvent = null;
 
-            // 🚀 STRATEGI 1: Cari berdasarkan ID Lampiran langsung (Paling Akurat)
-            if (!empty($attachedId)) {
-                foreach ($existingEvents as $evt) {
-                    if ($evt['id'] == $attachedId) {
-                        $targetEvent = $evt;
-                        break;
-                    }
-                }
+            // 🚀 STRATEGI UTAMA: Langsung tembak cari berdasarkan Google Event ID yang dikirim dari HP lu!
+            if ($attachedEvent && !empty($attachedEvent['id'])) {
+                $targetEvent = $this->eventModel->findByGoogleEventId($attachedEvent['id']);
             }
 
-            // 🔄 FALLBACK 2: Coba cari berdasarkan tebakan target_title dari AI
+            // 🔄 FALLBACK 1: Kalau ID-nya meleset, cari berdasarkan target_title dari AI
             if (!$targetEvent) {
+                $existingEvents = $this->eventModel->getUserEvents($user['id']);
                 foreach ($existingEvents as $evt) {
                     if (strtolower($evt['title'] ?? '') === strtolower($targetTitleFromAI ?? '')) {
                         $targetEvent = $evt;
@@ -206,7 +201,7 @@ class ChatController
                 }
             }
 
-            // 🔄 FALLBACK 3: Kalau tebakan AI meleset, cari pake judul asli di attached_event
+            // 🔄 FALLBACK 2: Kalau masih gak ketemu juga, cari berdasarkan judul lampiran frontend
             if (!$targetEvent && $attachedEvent) {
                 $attachedTitle = $attachedEvent['title'] ?? '';
                 foreach ($existingEvents as $evt) {
@@ -217,8 +212,9 @@ class ChatController
                 }
             }
 
+            // Jika semua rute pencarian mentok kosong
             if (!$targetEvent) {
-                $errContent = "Jadwal dengan nama '" . ($targetTitleFromAI ?? 'Unknown') . "' gak ketemu di data gue, brok.";
+                $errContent = "Jadwal '" . ($targetTitleFromAI ?? 'Unknown') . "' gak ketemu di data database lokal gue, brok.";
                 $this->chatModel->saveMessage([
                     'user_id' => $user['id'],
                     'role'    => 'assistant',
@@ -227,13 +223,14 @@ class ChatController
                 return response('error', $errContent, null, 404);
             }
 
+            // Siapkan data bodi baru untuk dilempar ke Google API
             $updateData = [
                 'title' => !empty($parsed['title']) ? $parsed['title'] : $targetEvent['title'],
                 'start' => $parsed['start'],
                 'end'   => $parsed['end']
             ];
 
-            // Eksekusi update via CalendarController menggunakan ID asli dari DB
+            // Eksekusi update via CalendarController menggunakan ID primary lokal database lu
             $googleResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
             $timeStartStr = date('H:i', strtotime($parsed['start']));
