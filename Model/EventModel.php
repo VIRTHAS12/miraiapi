@@ -59,9 +59,9 @@ class EventModel
     }
 
     // ✏️ Update event
-public function updateEvent($id, $data)
-{
-    $query = "UPDATE events SET 
+    public function updateEvent($id, $data)
+    {
+        $query = "UPDATE events SET 
         title = ?, 
         start_time = ?, 
         end_time = ?, 
@@ -69,15 +69,15 @@ public function updateEvent($id, $data)
         updated_at = NOW()
         WHERE id = ?";
 
-    $this->db->query($query, [
-        $data['title'],
-        $data['start_time'],
-        $data['end_time'],
-        $id
-    ]);
+        $this->db->query($query, [
+            $data['title'],
+            $data['start_time'],
+            $data['end_time'],
+            $id
+        ]);
 
-    return true;
-}
+        return true;
+    }
     // 🗑️ Delete event (soft delete)
     public function deleteEvent($id)
     {
