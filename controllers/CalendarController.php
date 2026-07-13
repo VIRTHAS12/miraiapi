@@ -186,6 +186,7 @@ class CalendarController
 
         $formattedEvents = [];
         foreach ($items as $item) {
+            // Abaikan jika event bertipe transparan atau tidak valid
             $start = $item['start']['dateTime'] ?? $item['start']['date'] ?? null;
             $end = $item['end']['dateTime'] ?? $item['end']['date'] ?? null;
 
@@ -193,6 +194,48 @@ class CalendarController
                 $startTimeFormatted = date('Y-m-d H:i:s', strtotime($start));
                 $endTimeFormatted = $end ? date('Y-m-d H:i:s', strtotime($end)) : $startTimeFormatted;
 
+                // Cek status pembatalan dari Google API
+                $googleStatus = $item['status'] ?? 'confirmed';
+
+                // 🔍 Cek apakah event ini sudah pernah ada di database lokal
+                $existingEvent = $this->eventModel->findByGoogleEventId($item['id']);
+
+                if ($googleStatus === 'cancelled') {
+                    // Skenario 1: Jika di Google sudah dihapus, hapus juga di lokal (Soft Delete)
+                    if ($existingEvent && $existingEvent['status'] !== 'cancelled') {
+                        $this->eventModel->deleteEvent($existingEvent['id']);
+                    }
+                    continue; // Lanjut ke event berikutnya, jangan tampilkan
+                }
+
+                if ($existingEvent) {
+                    // Skenario 2: Jika sudah ada di DB lokal, lakukan Update jika datanya berubah
+                    if (
+                        $existingEvent['title'] !== ($item['summary'] ?? '(Tanpa Judul)') ||
+                        $existingEvent['start_time'] !== $startTimeFormatted ||
+                        $existingEvent['end_time'] !== $endTimeFormatted ||
+                        $existingEvent['status'] !== 'active'
+                    ) {
+                        // Update DB Lokal (Buat method updateEventByGoogleId atau gunakan updateEvent bawaan)
+                        $this->eventModel->updateEvent($existingEvent['id'], [
+                            'title' => $item['summary'] ?? '(Tanpa Judul)',
+                            'start_time' => $startTimeFormatted,
+                            'end_time' => $endTimeFormatted
+                        ]);
+                    }
+                } else {
+                    // Skenario 3: Jika benar-benat baru (ada di Google tapi belum ada di lokal), Insert ke DB
+                    $this->eventModel->createEvent([
+                        'user_id' => $user['id'],
+                        'google_event_id' => $item['id'],
+                        'title' => $item['summary'] ?? '(Tanpa Judul)',
+                        'start_time' => $startTimeFormatted,
+                        'end_time' => $endTimeFormatted,
+                        'status' => 'active'
+                    ]);
+                }
+
+                // Masukkan ke array output untuk dikirim ke frontend
                 $formattedEvents[] = [
                     'id' => $item['id'],
                     'title' => $item['summary'] ?? '(Tanpa Judul)',
@@ -202,9 +245,8 @@ class CalendarController
             }
         }
 
-        return response('success', 'List event', $formattedEvents);
+        return response('success', 'List event berhasil disinkronkan', $formattedEvents);
     }
-
     // ❌ DELETE EVENT
     public function deleteEvent($id)
     {
