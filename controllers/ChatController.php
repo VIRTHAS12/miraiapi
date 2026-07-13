@@ -164,7 +164,6 @@ class ChatController
             $targetEvent = null;
 
             foreach ($existingEvents as $evt) {
-                // Anti-Null Safe Core Injection (?? '')
                 if (strtolower($evt['title'] ?? '') === strtolower($targetTitleFromAI ?? '')) {
                     $targetEvent = $evt;
                     break;
@@ -181,7 +180,9 @@ class ChatController
                 return response('error', $errContent, null, 404);
             }
 
+            // 🔥 FIX: Masukkan 'id' target ke dalam array update data!
             $updateData = [
+                'id'    => $targetEvent['id'], 
                 'title' => !empty($parsed['title']) ? $parsed['title'] : $targetEvent['title'],
                 'start' => $parsed['start'],
                 'end'   => $parsed['end']
