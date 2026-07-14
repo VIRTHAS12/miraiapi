@@ -163,17 +163,33 @@ class ChatController
                 $targetEvent = $db->query("SELECT * FROM events WHERE user_id = ? AND LOWER(title) = ? LIMIT 1", [$user['id'], strtolower($targetTitleFromAI)])->take();
             }
 
-            // Fallback Auto-Create
+            // Fallback Auto-Create jika event tidak ditemukan
             if (!$targetEvent) {
                 $eventResponse = $calendarController->createEventFromAI($user, !empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI'), $safeStartString, $safeEndString);
+                
+                // 🔥 PROTEKSI 1: Cek jika auto-create malah bentrok (clash)
+                if (isset($eventResponse['status']) && $eventResponse['status'] === 'clash') {
+                    $clashMessage = "Gagal update! Bentrok dengan jadwal '" . ($eventResponse['raw']['title'] ?? 'kegiatan lain') . "', brok.";
+                    $this->chatModel->saveMessage([
+                        'user_id' => $user['id'], 'role' => 'assistant', 'content' => $clashMessage
+                    ]);
+                    return response('error', $clashMessage, $eventResponse['raw'], 409);
+                }
+
+                if (isset($eventResponse['status']) && $eventResponse['status'] === 'error') {
+                    $errMessage = "Gagal memproses pangkalan internal kalender.";
+                    $this->chatModel->saveMessage([
+                        'user_id' => $user['id'], 'role' => 'assistant', 'content' => $errMessage
+                    ]);
+                    return response('error', $errMessage, null, 500);
+                }
+
                 $timeStartStr = date('H:i', strtotime($safeStartString));
                 $timeEndStr = date('H:i', strtotime($safeEndString));
                 $successMessage = "Jadwal lama gak ketemu, tapi udah gue buatin jadwal baru buat \"" . (!empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI')) . "\" di jam $timeStartStr - $timeEndStr WIB! 📅✅";
 
                 $this->chatModel->saveMessage([
-                    'user_id' => $user['id'],
-                    'role' => 'assistant',
-                    'content' => $successMessage
+                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $successMessage
                 ]);
 
                 return response('success', $successMessage, [
@@ -185,28 +201,36 @@ class ChatController
                 ]);
             }
 
+            // Jalankan update jika targetEvent ditemukan
             $updateData = [
                 'title' => !empty($parsed['title']) ? $parsed['title'] : $targetEvent['title'],
                 'start' => $safeStartString,
                 'end'   => $safeEndString
             ];
 
-            $calendarController->updateEvent($targetEvent['id'], $updateData);
+            $eventResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
+
+            // 🔥 PROTECTIONS 2: Cek jika proses update real-time kalender menghasilkan status clash/bentrok!
+            if (isset($eventResponse['status']) && $eventResponse['status'] === 'clash') {
+                $clashMessage = "Gagal update! Bentrok dengan jadwal '" . ($eventResponse['raw']['title'] ?? 'kegiatan lain') . "', brok.";
+                $this->chatModel->saveMessage([
+                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $clashMessage
+                ]);
+                return response('error', $clashMessage, $eventResponse['raw'], 409);
+            }
 
             $timeStartStr = date('H:i', strtotime($safeStartString));
             $timeEndStr = date('H:i', strtotime($safeEndString));
             $successMessage = "Berhasil mengupdate kegiatan: \"" . $updateData['title'] . "\" menjadi jam $timeStartStr sampai $timeEndStr WIB! ✅";
 
             $this->chatModel->saveMessage([
-                'user_id' => $user['id'],
-                'role' => 'assistant',
-                'content' => $successMessage
+                'user_id' => $user['id'], 'role' => 'assistant', 'content' => $successMessage
             ]);
 
             return response('success', $successMessage, [
                 'event' => [
                     'title' => $updateData['title'],
-                    'start' => date('Y-m-d H:i:s', strtotime($safeStartString)), // 🔥 FIX: Mengembalikan jam baru yang valid
+                    'start' => date('Y-m-d H:i:s', strtotime($safeStartString)),
                     'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
                 ]
             ]);
@@ -216,24 +240,24 @@ class ChatController
             $eventResponse = $calendarController->createEventFromAI($user, $parsed['title'], $safeStartString, $safeEndString);
 
             if ($eventResponse['status'] === 'clash') {
-                $clashMessage = "Gak bisa dijadwalkan brok, soalnya jam segitu lu ada jadwal tabrakan dengan kegiatan '" . $eventResponse['raw']['title'] . "'! 🛑";
+                $clashMessage = "Gagal membuat jadwal! Bentrok dengan jadwal '" . ($eventResponse['raw']['title'] ?? 'kegiatan lain') . "', brok.";
                 $this->chatModel->saveMessage([
-                    'user_id' => $user['id'],
-                    'role' => 'assistant',
-                    'content' => $clashMessage
+                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $clashMessage
                 ]);
-                return response('error', $eventResponse['message'], $eventResponse['raw'], 409);
+                return response('error', $clashMessage, $eventResponse['raw'], 409);
             }
 
             if ($eventResponse['status'] === 'error') {
-                return response('error', $eventResponse['message'], $eventResponse['raw'], 500);
+                $errMessage = "Gagal membuat agenda baru di pangkalan sistem.";
+                $this->chatModel->saveMessage([
+                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $errMessage
+                ]);
+                return response('error', $errMessage, $eventResponse['raw'], 500);
             }
 
             $successMessage = "Berhasil menjadwalkan kegiatan: " . $parsed['title'] . " ✅";
             $this->chatModel->saveMessage([
-                'user_id' => $user['id'],
-                'role' => 'assistant',
-                'content' => $successMessage
+                'user_id' => $user['id'], 'role' => 'assistant', 'content' => $successMessage
             ]);
 
             return response('success', 'Event berhasil dibuat via AI', [
@@ -243,8 +267,7 @@ class ChatController
                     'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
                 ]
             ]);
-        }
-    }
+        }    }
 
     // 📖 LOGIC HISTORY
     public function history()
