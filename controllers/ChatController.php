@@ -166,12 +166,14 @@ class ChatController
             // Fallback Auto-Create jika event tidak ditemukan
             if (!$targetEvent) {
                 $eventResponse = $calendarController->createEventFromAI($user, !empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI'), $safeStartString, $safeEndString);
-                
+
                 // 🔥 PROTEKSI 1: Cek jika auto-create malah bentrok (clash)
                 if (isset($eventResponse['status']) && $eventResponse['status'] === 'clash') {
                     $clashMessage = "Gagal update! Bentrok dengan jadwal '" . ($eventResponse['raw']['title'] ?? 'kegiatan lain') . "', brok.";
                     $this->chatModel->saveMessage([
-                        'user_id' => $user['id'], 'role' => 'assistant', 'content' => $clashMessage
+                        'user_id' => $user['id'],
+                        'role' => 'assistant',
+                        'content' => $clashMessage
                     ]);
                     return response('error', $clashMessage, $eventResponse['raw'], 409);
                 }
@@ -179,7 +181,9 @@ class ChatController
                 if (isset($eventResponse['status']) && $eventResponse['status'] === 'error') {
                     $errMessage = "Gagal memproses pangkalan internal kalender.";
                     $this->chatModel->saveMessage([
-                        'user_id' => $user['id'], 'role' => 'assistant', 'content' => $errMessage
+                        'user_id' => $user['id'],
+                        'role' => 'assistant',
+                        'content' => $errMessage
                     ]);
                     return response('error', $errMessage, null, 500);
                 }
@@ -189,15 +193,16 @@ class ChatController
                 $successMessage = "Jadwal lama gak ketemu, tapi udah gue buatin jadwal baru buat \"" . (!empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI')) . "\" di jam $timeStartStr - $timeEndStr WIB! 📅✅";
 
                 $this->chatModel->saveMessage([
-                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $successMessage
+                    'user_id' => $user['id'],
+                    'role' => 'assistant',
+                    'content' => $successMessage
                 ]);
 
                 return response('success', $successMessage, [
-                    'event' => [
-                        'title' => !empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI'),
-                        'start' => date('Y-m-d H:i:s', strtotime($safeStartString)),
-                        'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
-                    ]
+                    'id'    => $eventResponse['raw']['google_event_id'] ?? null,
+                    'title' => !empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI'),
+                    'start' => date('Y-m-d H:i:s', strtotime($safeStartString)),
+                    'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
                 ]);
             }
 
@@ -210,29 +215,35 @@ class ChatController
 
             $eventResponse = $calendarController->updateEvent($targetEvent['id'], $updateData);
 
-            // 🔥 PROTECTIONS 2: Cek jika proses update real-time kalender menghasilkan status clash/bentrok!
+            // 🔥 PROTEKSI 2: Cek jika proses update real-time kalender menghasilkan status clash/bentrok!
             if (isset($eventResponse['status']) && $eventResponse['status'] === 'clash') {
                 $clashMessage = "Gagal update! Bentrok dengan jadwal '" . ($eventResponse['raw']['title'] ?? 'kegiatan lain') . "', brok.";
                 $this->chatModel->saveMessage([
-                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $clashMessage
+                    'user_id' => $user['id'],
+                    'role' => 'assistant',
+                    'content' => $clashMessage
                 ]);
                 return response('error', $clashMessage, $eventResponse['raw'], 409);
             }
 
             $timeStartStr = date('H:i', strtotime($safeStartString));
             $timeEndStr = date('H:i', strtotime($safeEndString));
+
+            // 🔥 Pastikan ada kata kunci "kegiatan:" untuk regex engine history
             $successMessage = "Berhasil mengupdate kegiatan: \"" . $updateData['title'] . "\" menjadi jam $timeStartStr sampai $timeEndStr WIB! ✅";
 
             $this->chatModel->saveMessage([
-                'user_id' => $user['id'], 'role' => 'assistant', 'content' => $successMessage
+                'user_id' => $user['id'],
+                'role' => 'assistant',
+                'content' => $successMessage
             ]);
 
+            // 🔥 Flatten array response agar dibaca mulus di frontend tanpa nested .event
             return response('success', $successMessage, [
-                'event' => [
-                    'title' => $updateData['title'],
-                    'start' => date('Y-m-d H:i:s', strtotime($safeStartString)),
-                    'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
-                ]
+                'id'    => $targetEvent['google_event_id'] ?? $targetEvent['id'],
+                'title' => $updateData['title'],
+                'start' => date('Y-m-d H:i:s', strtotime($safeStartString)),
+                'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
             ]);
 
             // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
@@ -242,7 +253,9 @@ class ChatController
             if ($eventResponse['status'] === 'clash') {
                 $clashMessage = "Gagal membuat jadwal! Bentrok dengan jadwal '" . ($eventResponse['raw']['title'] ?? 'kegiatan lain') . "', brok.";
                 $this->chatModel->saveMessage([
-                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $clashMessage
+                    'user_id' => $user['id'],
+                    'role' => 'assistant',
+                    'content' => $clashMessage
                 ]);
                 return response('error', $clashMessage, $eventResponse['raw'], 409);
             }
@@ -250,24 +263,28 @@ class ChatController
             if ($eventResponse['status'] === 'error') {
                 $errMessage = "Gagal membuat agenda baru di pangkalan sistem.";
                 $this->chatModel->saveMessage([
-                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $errMessage
+                    'user_id' => $user['id'],
+                    'role' => 'assistant',
+                    'content' => $errMessage
                 ]);
                 return response('error', $errMessage, $eventResponse['raw'], 500);
             }
 
             $successMessage = "Berhasil menjadwalkan kegiatan: " . $parsed['title'] . " ✅";
             $this->chatModel->saveMessage([
-                'user_id' => $user['id'], 'role' => 'assistant', 'content' => $successMessage
+                'user_id' => $user['id'],
+                'role' => 'assistant',
+                'content' => $successMessage
             ]);
 
             return response('success', 'Event berhasil dibuat via AI', [
-                'event' => [
-                    'title' => $parsed['title'],
-                    'start' => date('Y-m-d H:i:s', strtotime($safeStartString)),
-                    'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
-                ]
+                'id'    => $eventResponse['raw']['google_event_id'] ?? null,
+                'title' => $parsed['title'],
+                'start' => date('Y-m-d H:i:s', strtotime($safeStartString)),
+                'end'   => date('Y-m-d H:i:s', strtotime($safeEndString))
             ]);
-        }    }
+        }
+    }
 
     // 📖 LOGIC HISTORY
     public function history()
@@ -278,7 +295,6 @@ class ChatController
 
         $eventMap = [];
         foreach ($userEvents as $evt) {
-            // Bersihkan spasi luar agar seragam
             $eventMap[strtolower(trim($evt['title']))] = [
                 'id'    => $evt['google_event_id'],
                 'title' => $evt['title'],
@@ -293,17 +309,23 @@ class ChatController
             $eventData = null;
 
             if ($chat['role'] === 'assistant') {
-                // 🔥 REGEX ULTIMATE: Mendukung "menjadwalkan kegiatan:" dan "mengupdate kegiatan:"
-                // Mengambil teks di dalam tanda kutip atau teks sampai ketemu simbol/spasi penutup
+                // 1. Cek regex untuk pesan sukses
                 if (
                     preg_match('/kegiatan:\s*[\"\\\']?([^\"\\\']得|\b.+?\b)/u', $chat['content'], $matches) ||
                     preg_match('/kegiatan:\s*([^✅\n]+)/u', $chat['content'], $matches)
                 ) {
-
-                    // Hilangkan tanda kutip, emoji centang, dan spasi sisa
                     $cleanedTitle = preg_replace('/[✅\"\'\s]+$/u', '', $matches[1]);
                     $titleKey = strtolower(trim($cleanedTitle));
 
+                    if (isset($eventMap[$titleKey])) {
+                        $eventData = $eventMap[$titleKey];
+                    }
+                }
+
+                // 🔥 2. Cek regex untuk pesan gagal bentrok agenda agar card penabrak tetap maping pas reload!
+                unset($matches);
+                if (!$eventData && preg_match('/Bentrok dengan jadwal\s*[\'"]([^\'"]+)/u', $chat['content'], $matches)) {
+                    $titleKey = strtolower(trim($matches[1]));
                     if (isset($eventMap[$titleKey])) {
                         $eventData = $eventMap[$titleKey];
                     }
@@ -327,6 +349,7 @@ class ChatController
 
         return response('success', 'Riwayat chat asisten berhasil dimuat.', $formattedData);
     }
+
     private function callOpenClaw($systemPrompt, $userMessage)
     {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
