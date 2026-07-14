@@ -96,7 +96,9 @@ class ChatController
         if (!$parsed || isset($parsed['status'])) {
             $fallbackMessage = !empty($rawAiOutput) ? $rawAiOutput : 'Tidak ada informasi jadwal terdeteksi dari kalimat lu, brok.';
             $this->chatModel->saveMessage([
-                'user_id' => $user['id'], 'role' => 'assistant', 'content' => $fallbackMessage
+                'user_id' => $user['id'],
+                'role' => 'assistant',
+                'content' => $fallbackMessage
             ]);
             return response('success', 'Tidak ada event terdeteksi', ['ai_raw' => $fallbackMessage]);
         }
@@ -126,7 +128,9 @@ class ChatController
             if (!$targetEvent) {
                 $errContent = "Jadwal '" . ($targetTitleFromAI ?? 'Unknown') . "' emang gak ada, brok.";
                 $this->chatModel->saveMessage([
-                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $errContent
+                    'user_id' => $user['id'],
+                    'role' => 'assistant',
+                    'content' => $errContent
                 ]);
                 return response('error', $errContent, null, 404);
             }
@@ -135,7 +139,9 @@ class ChatController
             $successMessage = "Jadwal \"" . $targetEvent['title'] . "\" berhasil gue hapus dari Google Calendar lu, brok! 🗑️✅";
 
             $this->chatModel->saveMessage([
-                'user_id' => $user['id'], 'role' => 'assistant', 'content' => $successMessage
+                'user_id' => $user['id'],
+                'role' => 'assistant',
+                'content' => $successMessage
             ]);
 
             return response('success', $successMessage, [
@@ -147,7 +153,7 @@ class ChatController
                 ]
             ]);
 
-        // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
+            // 2. ✏️ AKSI MENGUBAH JADWAL (UPDATE)
         } elseif (isset($parsed['action']) && $parsed['action'] === 'update') {
             $targetEvent = null;
             if ($attachedEvent && !empty($attachedEvent['id'])) {
@@ -165,7 +171,9 @@ class ChatController
                 $successMessage = "Jadwal lama gak ketemu, tapi udah gue buatin jadwal baru buat \"" . (!empty($parsed['title']) ? $parsed['title'] : ($attachedEvent['title'] ?? 'Presentasi AI')) . "\" di jam $timeStartStr - $timeEndStr WIB! 📅✅";
 
                 $this->chatModel->saveMessage([
-                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $successMessage
+                    'user_id' => $user['id'],
+                    'role' => 'assistant',
+                    'content' => $successMessage
                 ]);
 
                 return response('success', $successMessage, [
@@ -190,7 +198,9 @@ class ChatController
             $successMessage = "Berhasil mengupdate kegiatan: \"" . $updateData['title'] . "\" menjadi jam $timeStartStr sampai $timeEndStr WIB! ✅";
 
             $this->chatModel->saveMessage([
-                'user_id' => $user['id'], 'role' => 'assistant', 'content' => $successMessage
+                'user_id' => $user['id'],
+                'role' => 'assistant',
+                'content' => $successMessage
             ]);
 
             return response('success', $successMessage, [
@@ -201,14 +211,16 @@ class ChatController
                 ]
             ]);
 
-        // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
+            // 3. 📅 AKSI BUAT JADWAL BARU (CREATE)
         } else {
             $eventResponse = $calendarController->createEventFromAI($user, $parsed['title'], $safeStartString, $safeEndString);
 
             if ($eventResponse['status'] === 'clash') {
                 $clashMessage = "Gak bisa dijadwalkan brok, soalnya jam segitu lu ada jadwal tabrakan dengan kegiatan '" . $eventResponse['raw']['title'] . "'! 🛑";
                 $this->chatModel->saveMessage([
-                    'user_id' => $user['id'], 'role' => 'assistant', 'content' => $clashMessage
+                    'user_id' => $user['id'],
+                    'role' => 'assistant',
+                    'content' => $clashMessage
                 ]);
                 return response('error', $eventResponse['message'], $eventResponse['raw'], 409);
             }
@@ -219,7 +231,9 @@ class ChatController
 
             $successMessage = "Berhasil menjadwalkan kegiatan: " . $parsed['title'] . " ✅";
             $this->chatModel->saveMessage([
-                'user_id' => $user['id'], 'role' => 'assistant', 'content' => $successMessage
+                'user_id' => $user['id'],
+                'role' => 'assistant',
+                'content' => $successMessage
             ]);
 
             return response('success', 'Event berhasil dibuat via AI', [
@@ -241,10 +255,11 @@ class ChatController
 
         $eventMap = [];
         foreach ($userEvents as $evt) {
+            // Bersihkan spasi luar agar seragam
             $eventMap[strtolower(trim($evt['title']))] = [
                 'id'    => $evt['google_event_id'],
                 'title' => $evt['title'],
-                'start' => date('c', strtotime($evt['start_time'])), 
+                'start' => date('c', strtotime($evt['start_time'])),
                 'end'   => date('c', strtotime($evt['end_time']))
             ];
         }
@@ -255,9 +270,17 @@ class ChatController
             $eventData = null;
 
             if ($chat['role'] === 'assistant') {
-                // Modifikasi regex agar toleran dan membuang tanda kutip \" atau " secara paksa
-                if (preg_match('/kegiatan:\s*[\"\\\']*([^\"\\\']+)/u', $chat['content'], $matches)) {
-                    $titleKey = strtolower(trim($matches[1]));
+                // 🔥 REGEX ULTIMATE: Mendukung "menjadwalkan kegiatan:" dan "mengupdate kegiatan:"
+                // Mengambil teks di dalam tanda kutip atau teks sampai ketemu simbol/spasi penutup
+                if (
+                    preg_match('/kegiatan:\s*[\"\\\']?([^\"\\\']得|\b.+?\b)/u', $chat['content'], $matches) ||
+                    preg_match('/kegiatan:\s*([^✅\n]+)/u', $chat['content'], $matches)
+                ) {
+
+                    // Hilangkan tanda kutip, emoji centang, dan spasi sisa
+                    $cleanedTitle = preg_replace('/[✅\"\'\s]+$/u', '', $matches[1]);
+                    $titleKey = strtolower(trim($cleanedTitle));
+
                     if (isset($eventMap[$titleKey])) {
                         $eventData = $eventMap[$titleKey];
                     }
@@ -281,7 +304,8 @@ class ChatController
 
         return response('success', 'Riwayat chat asisten berhasil dimuat.', $formattedData);
     }
-    private function callOpenClaw($systemPrompt, $userMessage) {
+    private function callOpenClaw($systemPrompt, $userMessage)
+    {
         $apiUrl = $_ENV['OPENCLAW_API_URL'];
         try {
             $client = new \WebSocket\Client($apiUrl, [
@@ -296,21 +320,28 @@ class ChatController
             $client->text(json_encode($connectPayload));
             $auth = $client->receive();
             $authDecoded = json_decode($auth, true);
-            if (!($authDecoded['ok'] ?? false)) { $client->close(); return ['error' => true, 'message' => 'Auth Client Gagal']; }
+            if (!($authDecoded['ok'] ?? false)) {
+                $client->close();
+                return ['error' => true, 'message' => 'Auth Client Gagal'];
+            }
             $requestId = uniqid();
             $fullMessageString = !empty($systemPrompt) ? "[System Instruction: " . $systemPrompt . "]\nUser Message: " . $userMessage : $userMessage;
             $chatPayload = ["type" => "req", "id" => $requestId, "method" => "chat.send", "params" => ["sessionKey" => "agent:main:main", "idempotencyKey" => uniqid('idemp_', true), "message" => (string) $fullMessageString]];
             $client->text(json_encode($chatPayload, JSON_UNESCAPED_SLASHES));
             $aiTextResponse = "";
             while (true) {
-                $msg = $client->receive(); if (!$msg) break;
+                $msg = $client->receive();
+                if (!$msg) break;
                 $decoded = json_decode($msg, true);
                 if (isset($decoded['event']) && ($decoded['event'] === 'health' || $decoded['event'] === 'tick')) continue;
                 if (isset($decoded['type']) && $decoded['type'] === 'event') {
                     if ($decoded['event'] === 'chat' || $decoded['event'] === 'agent') {
                         $chunkText = $decoded['payload']['deltaText'] ?? $decoded['payload']['data']['text'] ?? $decoded['payload']['data']['delta'] ?? '';
                         if (!empty($chunkText)) $aiTextResponse .= $chunkText;
-                        if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'error') { $client->close(); return ['error' => true, 'message' => $decoded['payload']['errorMessage'] ?? 'LLM Agent Error']; }
+                        if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'error') {
+                            $client->close();
+                            return ['error' => true, 'message' => $decoded['payload']['errorMessage'] ?? 'LLM Agent Error'];
+                        }
                         if (isset($decoded['payload']['state']) && $decoded['payload']['state'] === 'final') {
                             $finalText = $decoded['payload']['message']['content'][0]['text'] ?? $decoded['payload']['message']['content'][0] ?? '';
                             if (!empty($finalText) && is_string($finalText)) $aiTextResponse = $finalText;
@@ -320,14 +351,22 @@ class ChatController
                     }
                 }
                 if (isset($decoded['id']) && $decoded['id'] === $requestId) {
-                    if (isset($decoded['ok']) && $decoded['ok'] === false) { $client->close(); return ['error' => true, 'message' => $decoded['errorMessage'] ?? 'Request chat.send rejected']; }
+                    if (isset($decoded['ok']) && $decoded['ok'] === false) {
+                        $client->close();
+                        return ['error' => true, 'message' => $decoded['errorMessage'] ?? 'Request chat.send rejected'];
+                    }
                     $finalText = $decoded['payload']['message']['content'][0]['text'] ?? '';
-                    if (!empty($finalText)) { $aiTextResponse = $finalText; break; }
+                    if (!empty($finalText)) {
+                        $aiTextResponse = $finalText;
+                        break;
+                    }
                     if (($decoded['ok'] ?? false) && !empty($aiTextResponse)) break;
                 }
             }
             $client->close();
             return ['choices' => [['message' => ['role' => 'assistant', 'content' => trim($aiTextResponse)]]]];
-        } catch (\Throwable $e) { return ['error' => true, 'message' => $e->getMessage()]; }
+        } catch (\Throwable $e) {
+            return ['error' => true, 'message' => $e->getMessage()];
+        }
     }
 }
